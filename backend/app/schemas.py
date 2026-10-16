@@ -62,6 +62,24 @@ class PasswordChangeIn(BaseModel):
     new_password: str = Field(max_length=PASSWORD_MAX)
 
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def lower_email(cls, v: str) -> str:
+        return v.lower()
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    new_password: str = Field(max_length=PASSWORD_MAX)
+
+
+class TokenIn(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
 class UsernameAvailability(BaseModel):
     available: bool
     reason: str | None = None
@@ -79,6 +97,7 @@ class MeOut(BaseModel):
     avatar_url: str | None
     has_password: bool
     has_google: bool
+    email_verified: bool = False
     created_at: datetime
     is_admin: bool = False
     current_streak: int = 0
@@ -97,6 +116,7 @@ class MeOut(BaseModel):
             avatar_url=user.avatar_url,
             has_password=user.password_hash is not None,
             has_google=user.google_sub is not None,
+            email_verified=user.email_verified,
             created_at=user.created_at,
             is_admin=user.is_admin,
             current_streak=effective_streak(user),

@@ -193,7 +193,10 @@ export default function AuthPage({ mode }: { mode: "login" | "register" }) {
           )}
 
           <div className="field">
-            <label htmlFor="password">Password</label>
+            <div className="label-row">
+              <label htmlFor="password">Password</label>
+              {isLogin && <Link to="/forgot-password" className="small">Forgot password?</Link>}
+            </div>
             <PasswordInput
               id="password"
               value={password}

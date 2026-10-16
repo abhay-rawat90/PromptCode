@@ -3,6 +3,8 @@ import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from
 import { useAuth } from "./auth";
 import { Avatar, EmptyState, Spinner } from "./components/ui";
 import { StreakChip } from "./components/Daily";
+import { ForgotPassword, ResetPassword, VerifyBanner, VerifyEmail } from "./pages/AccountFlows";
+import Admin from "./pages/Admin";
 import AuthPage from "./pages/AuthPage";
 import DailyArchive from "./pages/DailyArchive";
 import Leaderboard from "./pages/Leaderboard";
@@ -20,6 +22,13 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const location = useLocation();
   if (loading) return <div className="page center-page"><Spinner /></div>;
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  return <>{children}</>;
+}
+
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="page center-page"><Spinner /></div>;
+  if (!user?.is_admin) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -57,6 +66,7 @@ function UserMenu() {
           <Link role="menuitem" to={`/u/${user.username}`}>Profile</Link>
           <Link role="menuitem" to="/submissions">My submissions</Link>
           <Link role="menuitem" to="/settings">Settings</Link>
+          {user.is_admin && <Link role="menuitem" to="/admin">Admin</Link>}
           <button
             role="menuitem"
             onClick={async () => {
@@ -126,6 +136,7 @@ export default function App() {
     <>
       <a href="#main" className="skip-link">Skip to content</a>
       {!isAuthPage && <Nav />}
+      {!isAuthPage && <VerifyBanner />}
       <div id="main">
         <Routes>
           <Route path="/" element={<ProblemList />} />
@@ -133,6 +144,10 @@ export default function App() {
           <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="/daily" element={<DailyArchive />} />
+          <Route path="/forgot-password" element={<GuestOnly><ForgotPassword /></GuestOnly>} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
+          <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
           <Route path="/u/:username" element={<Profile />} />
           <Route path="/problems/new" element={<RequireAuth><ProblemForm /></RequireAuth>} />
           <Route path="/problems/:slug" element={<ProblemPage />} />

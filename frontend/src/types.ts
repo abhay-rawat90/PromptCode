@@ -9,6 +9,7 @@ export interface User {
   avatar_url: string | null;
   has_password: boolean;
   has_google: boolean;
+  email_verified: boolean;
   created_at: string;
   is_admin: boolean;
   current_streak: number;

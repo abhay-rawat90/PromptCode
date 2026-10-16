@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from .. import daily, grader, ratelimit
+from .. import daily, grader, ratelimit, usage
+from ..config import settings
 from ..security import get_current_user, get_optional_user
 from ..db import get_db
 from ..models import Problem, Submission, TestCase, User
@@ -178,6 +179,11 @@ def get_problem_full(
 def create_problem(
     body: ProblemIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> ProblemDetail:
+    if settings.require_verified_to_publish and not user.email_verified:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Please verify your email before publishing problems. Check your inbox, or resend the link from Settings.",
+        )
     ratelimit.enforce("create_problem_user", str(user.id), message="You're creating problems too quickly. Try again later.")
     problem = Problem(slug=_unique_slug(db, body.title), author_id=user.id)
     _apply(problem, body)
@@ -216,7 +222,8 @@ async def run_samples(
     problem = _get_problem(db, slug)
     cases = [t for t in problem.test_cases if t.is_sample]
     _spend_budget("run_user", user, len(cases))
-    result = await grader.evaluate(body.prompt, cases)
+    with usage.attribute("run", user.id):
+        result = await grader.evaluate(body.prompt, cases)
     return _run_out(result, cases, user)
 
 
@@ -228,7 +235,8 @@ async def submit(
     problem = _get_problem(db, slug)
     cases = list(problem.test_cases)
     _spend_budget("submit_user", user, len(cases))
-    result = await grader.evaluate(body.prompt, cases)
+    with usage.attribute("submit", user.id):
+        result = await grader.evaluate(body.prompt, cases)
     out = _run_out(result, cases, user)
 
     submission = Submission(
@@ -252,6 +260,7 @@ async def submit(
 
 
 def _spend_budget(limit: str, user: User, test_count: int) -> None:
+    usage.enforce_daily_cap()
     ratelimit.enforce(limit, str(user.id), message="You're running prompts too quickly. Wait a moment and try again.")
     ratelimit.enforce(
         "daily_tests_user",

@@ -13,6 +13,7 @@ from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel
 
+from . import usage
 from .config import settings
 
 INPUT_PLACEHOLDER = "{{input}}"
@@ -63,7 +64,7 @@ async def _generate(model: str, contents: str, config: types.GenerateContentConf
     backoff = 2.0
     while True:
         try:
-            return await get_client().aio.models.generate_content(model=model, contents=contents, config=config)
+            resp = await get_client().aio.models.generate_content(model=model, contents=contents, config=config)
         except errors.APIError as exc:
             if exc.code == 429:
                 wait = _retry_after_seconds(exc)
@@ -75,6 +76,11 @@ async def _generate(model: str, contents: str, config: types.GenerateContentConf
                 raise
             log.info("Gemini %s on %s; retrying in %.0fs", exc.code, model, wait)
             await asyncio.sleep(wait)
+            continue
+        meta = getattr(resp, "usage_metadata", None)
+        if meta is not None:
+            usage.record(meta.prompt_token_count or 0, (meta.candidates_token_count or 0) + (meta.thoughts_token_count or 0))
+        return resp
 
 
 def get_client() -> genai.Client:

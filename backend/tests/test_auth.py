@@ -185,8 +185,8 @@ def test_google_sign_in_creates_then_reuses_account(client, make_client, monkeyp
 
 
 def test_google_links_existing_email_account_and_blocks_pre_hijacking(make_client, monkeypatch):
-    # An "attacker" registers the victim's email with a password they know...
-    attacker = make_client("linkme")
+    # An "attacker" registers the victim's email with a password they know (but can't verify it)...
+    attacker = make_client("linkme", verified=False)
     # ...then the real owner signs in with Google, proving they own the email.
     _fake_google(monkeypatch, sub="google-link", email="linkme@example.com")
     owner = make_client()
@@ -216,8 +216,13 @@ def test_migrations_keep_case_insensitive_username_index():
 
     from app.db import engine
 
+    query = (
+        "select name from sqlite_master where type='index'"
+        if engine.dialect.name == "sqlite"
+        else "select indexname from pg_indexes where tablename = 'users'"
+    )
     with engine.connect() as conn:
-        names = {r[0] for r in conn.execute(text("select name from sqlite_master where type='index'"))}
+        names = {r[0] for r in conn.execute(text(query))}
     assert "ix_users_username_lower" in names
     assert "email_verified" in {c["name"] for c in inspect(engine).get_columns("users")}
 
@@ -268,3 +273,13 @@ def test_google_token_with_wrong_audience_is_rejected(client, monkeypatch):
     token, certs = _signed_google_token(iat_offset=0, audience="someone-elses-app.apps.googleusercontent.com")
     monkeypatch.setattr(google_id_token, "_fetch_certs", lambda request, url: certs)
     assert client.post("/api/auth/google", json={"credential": token}).status_code == 401
+
+
+
+def test_google_link_keeps_password_of_verified_account(make_client, monkeypatch):
+    """A user who verified their email owns it, so linking Google must not touch their password."""
+    make_client("verified_owner")  # verified via the email link
+    _fake_google(monkeypatch, sub="google-verified-owner", email="verified_owner@example.com")
+    me = make_client().post("/api/auth/google", json={"credential": "valid-google-token"}).json()
+    assert me["username"] == "verified_owner" and me["has_password"] and me["notice"] is None
+    assert make_client().post("/api/auth/login", json={"login": "verified_owner", "password": "Gl4cier-Vortex!"}).status_code == 200

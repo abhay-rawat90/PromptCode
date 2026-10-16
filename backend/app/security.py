@@ -125,9 +125,11 @@ def get_admin_user(user: User = Depends(get_current_user)) -> User:
 
 def client_ip(request: Request) -> str:
     if settings.trust_proxy:
-        forwarded = request.headers.get("x-forwarded-for")
+        # The left-most entries are whatever the client claimed; only the entries appended by
+        # our own proxies can be trusted, so count from the right.
+        forwarded = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            return forwarded[-min(settings.trusted_proxy_hops, len(forwarded))]
     return request.client.host if request.client else "unknown"
 
 

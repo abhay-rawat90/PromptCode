@@ -15,7 +15,7 @@ from .config import settings
 from .db import SessionLocal
 from .migrations import upgrade_database
 from . import daily
-from .routers import auth, daily as daily_routes, problems, submissions, users
+from .routers import admin, auth, daily as daily_routes, problems, submissions, users
 from .security import SESSION_COOKIE, csrf_ok
 from .seed import seed
 
@@ -47,6 +47,12 @@ async def lifespan(app: FastAPI):
     if scheduler:
         scheduler.cancel()
 
+
+if settings.sentry_dsn:
+    import sentry_sdk
+
+    # Error reporting only: no request bodies, cookies or user details are sent.
+    sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.environment, send_default_pii=False, traces_sample_rate=0.0)
 
 app = FastAPI(
     title="PromptCode",
@@ -143,6 +149,7 @@ app.include_router(problems.router)
 app.include_router(submissions.router)
 app.include_router(users.router)
 app.include_router(daily_routes.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/health")

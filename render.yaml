@@ -1,0 +1,55 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# In the Render dashboard: New > Blueprint > pick this repo. You'll be asked for the
+# `sync: false` values (secrets) on first deploy.
+services:
+  - type: web
+    name: promptcode
+    runtime: docker
+    plan: free            # free instances sleep when idle; use "starter" to keep the daily scheduler awake
+    region: oregon
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: promptcode-db
+          property: connectionString
+      - key: RATE_LIMIT_STORAGE
+        fromService:
+          type: keyvalue
+          name: promptcode-redis
+          property: connectionString
+      # ---- secrets / per-deployment values (entered in the dashboard) ----
+      - key: APP_URL              # e.g. https://promptcode.onrender.com (no trailing slash)
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM           # e.g. PromptCode <no-reply@yourdomain.com> (domain verified in Resend)
+        sync: false
+      - key: SENTRY_DSN           # optional
+        sync: false
+      - key: DAILY_TOKEN_CAP      # optional site-wide daily Gemini token cap, e.g. 2000000
+        sync: false
+
+  - type: keyvalue
+    name: promptcode-redis
+    plan: free
+    ipAllowList: []       # only reachable from your Render services
+
+databases:
+  - name: promptcode-db
+    plan: free            # note: Render's free Postgres expires after 30 days - upgrade to keep data
+    databaseName: promptcode
+    user: promptcode

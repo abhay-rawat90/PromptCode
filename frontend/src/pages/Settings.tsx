@@ -55,6 +55,41 @@ function UsernameCard() {
   );
 }
 
+function EmailCard() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  async function resend() {
+    setBusy(true);
+    try {
+      toast((await api<{ detail: string }>("/auth/resend-verification", { method: "POST" })).detail, "success");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card settings-card">
+      <h2>Email</h2>
+      <div className="email-row">
+        <span>{user!.email}</span>
+        {user!.email_verified ? <span className="pill-ok">✓ Verified</span> : <span className="pill-warn">Not verified</span>}
+      </div>
+      {!user!.email_verified && (
+        <>
+          <p className="muted small">Verify your email to publish problems and to reset your password if you forget it.</p>
+          <div className="card-actions">
+            <button className="btn primary" onClick={resend} disabled={busy}>{busy ? <Spinner small /> : "Send verification email"}</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PasswordCard() {
   const { user, setUser } = useAuth();
   const toast = useToast();
@@ -154,6 +189,7 @@ export default function Settings() {
       <h1>Settings</h1>
       <div className="stack">
         <UsernameCard />
+        <EmailCard />
         <PasswordCard />
         <SessionsCard />
       </div>

@@ -159,3 +159,32 @@ class DailyQueueItem(Base):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     used_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+class AuthToken(Base):
+    """One-time token emailed to a user (verify email, reset password). Only its hash is stored."""
+
+    __tablename__ = "auth_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    purpose: Mapped[str] = mapped_column(String(20))  # "verify_email" | "reset_password"
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class UsageDaily(Base):
+    """Gemini tokens spent per UTC day, per kind of work and per user (user_id 0 = system)."""
+
+    __tablename__ = "usage_daily"
+    __table_args__ = (UniqueConstraint("day", "kind", "user_id", name="uq_usage_daily_day_kind_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # run | submit | daily | other
+    user_id: Mapped[int] = mapped_column(Integer, default=0)
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)

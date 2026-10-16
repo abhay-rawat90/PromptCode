@@ -2,7 +2,7 @@ import logging
 import re
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from google.auth import exceptions as google_exceptions
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
@@ -10,12 +10,15 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import ratelimit
+from .. import emails, ratelimit, tokens
 from ..config import settings
 from ..db import get_db
 from ..models import User, utcnow
 from ..schemas import (
     AuthConfig,
+    ForgotPasswordIn,
+    ResetPasswordIn,
+    TokenIn,
     GoogleIn,
     LoginIn,
     MeOut,
@@ -81,8 +84,19 @@ def username_available(
     return UsernameAvailability(available=True)
 
 
+def _send_verification(background: BackgroundTasks, db: Session, user: User) -> None:
+    raw = tokens.issue(db, user, "verify_email")
+    background.add_task(emails.send_verification, user.email, user.username, raw)
+
+
 @router.post("/register", response_model=MeOut, status_code=status.HTTP_201_CREATED)
-def register(body: RegisterIn, request: Request, response: Response, db: Session = Depends(get_db)) -> MeOut:
+def register(
+    body: RegisterIn,
+    request: Request,
+    response: Response,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> MeOut:
     ratelimit.enforce("register_ip", client_ip(request))
     if _username_taken(db, body.username):
         raise HTTPException(status.HTTP_409_CONFLICT, "That username is already taken.")
@@ -98,6 +112,7 @@ def register(body: RegisterIn, request: Request, response: Response, db: Session
     except IntegrityError:  # lost a race with a concurrent registration
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "That username or email was just taken.")
+    _send_verification(background, db, user)
     return _login(response, db, user)
 
 
@@ -243,3 +258,70 @@ def change_password(
     db.commit()
     start_session(response, user)  # keep this device signed in
     return MeOut.of(user)
+
+
+# ---------- email verification & password reset ----------
+
+GENERIC_RESET_REPLY = {
+    "detail": "If an account exists for that email, we've sent a link to reset the password. Check your inbox."
+}
+
+
+@router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
+def forgot_password(
+    body: ForgotPasswordIn, request: Request, background: BackgroundTasks, db: Session = Depends(get_db)
+) -> dict:
+    ratelimit.enforce("forgot_ip", client_ip(request))
+    ratelimit.enforce(
+        "forgot_email",
+        body.email,
+        message="We've already sent a few reset emails. Check your inbox (and spam), or try again later.",
+    )
+    user = db.scalar(select(User).where(User.email == body.email))
+    if user is not None:
+        raw = tokens.issue(db, user, "reset_password")
+        background.add_task(emails.send_password_reset, user.email, user.username, raw)
+    # Same reply either way, so this can't be used to find out who has an account.
+    return GENERIC_RESET_REPLY
+
+
+@router.post("/reset-password", response_model=MeOut)
+def reset_password(body: ResetPasswordIn, request: Request, response: Response, db: Session = Depends(get_db)) -> MeOut:
+    ratelimit.enforce("reset_ip", client_ip(request))
+    user = tokens.consume(db, body.token, "reset_password")
+    if user is None:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This reset link is invalid or has expired. Request a new one.")
+    if problems := password_problems(body.new_password, user.username, user.email):
+        db.rollback()  # keep the token usable so they can try a stronger password
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, password_error_message(problems))
+    user.password_hash = hash_password(body.new_password)
+    user.email_verified = True  # they just proved they can read this inbox
+    user.token_version += 1  # sign out everywhere else
+    db.commit()
+    return _login(response, db, user)
+
+
+@router.post("/verify-email")
+def verify_email(body: TokenIn, request: Request, db: Session = Depends(get_db)) -> dict:
+    ratelimit.enforce("reset_ip", client_ip(request))
+    user = tokens.consume(db, body.token, "verify_email")
+    if user is None:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This verification link is invalid or has expired.")
+    user.email_verified = True
+    db.commit()
+    return {"detail": "Email verified.", "email": user.email}
+
+
+@router.post("/resend-verification", status_code=status.HTTP_202_ACCEPTED)
+def resend_verification(
+    background: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict:
+    if user.email_verified:
+        return {"detail": "Your email is already verified."}
+    ratelimit.enforce(
+        "verify_resend_user", str(user.id), message="We've sent a few emails already. Check your inbox and spam folder."
+    )
+    _send_verification(background, db, user)
+    return {"detail": f"We've sent a new verification link to {user.email}."}

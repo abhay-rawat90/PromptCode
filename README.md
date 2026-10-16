@@ -19,7 +19,7 @@ Anyone with an account can also publish their own problems.
 cd backend
 python -m venv .venv
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 copy .env.example .env          # macOS/Linux: cp .env.example .env
 #   then set GEMINI_API_KEY and JWT_SECRET (see the comments in .env)
 uvicorn app.main:app --reload --reload-dir app
@@ -119,25 +119,70 @@ How sign-in works:
 | Cost abuse | Run and submit are limited per user per minute, plus a daily budget of test executions per user (`DAILY_TEST_BUDGET`). There's also a cap on Gemini calls in flight across the whole server. |
 | Headers | CSP, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy, HSTS (over HTTPS), and `no-store` on API responses. |
 | Inputs | Every request body is checked against a schema with length limits. Regex checks time out after 1 second. Search escapes `%` and `_`. Problem descriptions are rendered as Markdown without raw HTML. |
-| Production guard | With `ENVIRONMENT=production`, the server won't start if `JWT_SECRET` is weak or `COOKIE_SECURE` is false, and `/docs` is disabled. |
+| Email | New accounts get a verification link, which is required before publishing problems. "Forgot password?" emails a link that works once and expires in an hour; using it signs out every other session. Tokens are stored only as SHA-256 hashes, and the forgot-password reply is the same whether or not an account exists. |
+| Spend | Every Gemini call is counted per day, per user and per kind of work. Admins see it at `/admin`, and `DAILY_TOKEN_CAP` stops runs for the rest of the day once reached. |
+| Production guard | With `ENVIRONMENT=production`, the server won't start with a weak `JWT_SECRET`, `COOKIE_SECURE` off, SQLite, a non-https `APP_URL` or a missing Resend key. `/docs` is disabled. |
 
-Not built yet, and the natural next steps: email verification and "forgot password". Both need
-an email provider such as SMTP, Resend or SendGrid.
+## Email (Resend)
 
-## Deploying and scaling
+During development, emails aren't sent. They're printed in the backend terminal, links included
+(`EMAIL_BACKEND=console`), so you can click verify and reset links locally.
 
-The API keeps no session state in memory, so you can run as many instances as you like behind a
-load balancer:
+To send real email:
 
-1. `cd frontend && npm run build`. The backend serves `frontend/dist` itself, so the site and the
-   API share one origin.
-2. Use Postgres: `pip install "psycopg[binary]"` and set
-   `DATABASE_URL=postgresql+psycopg://user:pass@host/db`.
-3. Share rate-limit counters: `pip install redis` and set `RATE_LIMIT_STORAGE=redis://host:6379`.
-4. Set `ENVIRONMENT=production`, `COOKIE_SECURE=true`, a strong `JWT_SECRET`, `TRUST_PROXY=true`
-   (behind your proxy) and `CORS_ORIGINS=https://your.domain`.
-5. Run `alembic upgrade head` once per deploy and set `AUTO_MIGRATE=false` on the instances.
-6. Start the server with `uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4`.
+1. Create an account at [resend.com](https://resend.com) and an **API key** with "Sending access".
+2. **Add and verify your domain** (Resend → Domains, then add the DNS records it shows). Until
+   you do, Resend only delivers to your own address from `onboarding@resend.dev`.
+3. Set `RESEND_API_KEY=re_...` and `EMAIL_FROM="PromptCode <no-reply@yourdomain.com>"`. The
+   backend switches to Resend automatically when a key is set.
+
+## Admin
+
+Make yourself an admin with `.venv\Scripts\python -m app.admin make-admin <username>`. The
+account menu then shows **Admin**, with:
+- Gemini tokens used per day, broken down by run, submit and daily generation;
+- today's biggest users, and the daily cap;
+- the daily-problem queue.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+- the backend tests on **SQLite and on Postgres 16**;
+- a migration check: upgrade, `alembic check` and a downgrade;
+- the frontend type-check and build;
+- a Docker image build and a check that the container starts and serves the site.
+
+## Deploying to Render
+
+The repo includes a `Dockerfile` and a Render Blueprint (`render.yaml`) that create the web
+service, Postgres and Redis (Key Value) together. The web service's Docker image builds the
+frontend and serves it, so the site and the API share one origin.
+
+1. Push the repo to GitHub.
+2. In Render, choose **New → Blueprint**, pick the repo, and approve the three resources.
+3. Fill in the secret values it asks for:
+   - `APP_URL`: your service URL, e.g. `https://promptcode.onrender.com`, with no trailing slash.
+     You can set it after the first deploy, once you know the URL.
+   - `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `RESEND_API_KEY`, `EMAIL_FROM`.
+   - Optionally `SENTRY_DSN` and `DAILY_TOKEN_CAP`.
+   - `JWT_SECRET`, `DATABASE_URL` and the Redis URL are filled in automatically.
+4. In Google Cloud → Credentials, add your Render URL to the OAuth client's **Authorized
+   JavaScript origins**.
+5. Make yourself an admin: Render → promptcode → **Shell**, then
+   `python -m app.admin make-admin <username>`.
+
+Migrations run automatically at startup. Pushing to `main` redeploys.
+
+Things to know about Render's free plans:
+- Free web services **sleep after 15 minutes idle** and take about a minute to wake. The daily
+  scheduler only runs while the service is awake; the first visit of the day wakes it and
+  prepares the problem. The `starter` plan stays awake.
+- Free Postgres **expires after 30 days**. Upgrade it, which also turns on daily backups, before
+  you have real users.
+
+**Scaling beyond one instance:** keep `--workers 1` and add instances instead. Set
+`DAILY_SCHEDULER=false` on all but one, or on all of them plus a Render Cron Job running
+`python -m app.daily`. Rate limits are already shared through Redis.
 
 To change the database schema, edit `app/models.py`, run
 `alembic revision --autogenerate -m "what changed"`, review the generated file, then run

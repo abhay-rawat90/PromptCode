@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
 import { Skeleton, Spinner } from "../components/ui";
@@ -130,6 +130,12 @@ export default function ProblemForm() {
             <p className="muted">Describe a task, then add test cases that a good prompt should pass.</p>
           </div>
         </div>
+
+        {!editing && user && !user.email_verified && (
+          <div className="alert info">
+            You'll need to verify <strong>{user.email}</strong> before publishing - use the link we emailed you, or resend it from <Link to="/settings">Settings</Link>.
+          </div>
+        )}
 
         <div className="card">
           <div className="field">

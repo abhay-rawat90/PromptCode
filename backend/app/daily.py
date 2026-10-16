@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import grader, llm
+from . import grader, llm, usage
 from .config import settings
 from .db import SessionLocal
 from .models import DailyChallenge, DailyQueueItem, DailySolve, Problem, TestCase, User
@@ -222,7 +222,7 @@ async def ensure_daily(day: date) -> DailyChallenge | None:
     if not settings.daily_enabled:
         return None
     # Nobody is waiting on this, so ride out free-tier rate limits instead of failing.
-    with llm.patience(300):
+    with llm.patience(300), usage.attribute("daily"):
         return await _ensure_daily(day)
 
 

@@ -1,3 +1,4 @@
+# Production dependencies. For development/tests: pip install -r requirements-dev.txt
 fastapi>=0.115
 uvicorn[standard]>=0.32
 sqlalchemy>=2.0.36
@@ -12,10 +13,6 @@ limits>=3.13
 google-genai>=2.31
 jsonschema>=4.23
 regex>=2024.11.6
-
-# Optional, for production scale-out:
-#   psycopg[binary]>=3.2   -> DATABASE_URL=postgresql+psycopg://...
-#   redis>=5.2             -> RATE_LIMIT_STORAGE=redis://host:6379
-
-pytest>=8.3
-httpx>=0.27
+psycopg[binary]>=3.2      # Postgres (DATABASE_URL=postgresql://...)
+redis>=5.2                # shared rate limits (RATE_LIMIT_STORAGE=redis://...)
+sentry-sdk[fastapi]>=2.19 # error reporting (SENTRY_DSN)
