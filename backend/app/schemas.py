@@ -147,6 +147,14 @@ class MeOut(BaseModel):
         )
 
 
+class BadgeOut(BaseModel):
+    key: str
+    name: str
+    icon: str
+    description: str
+    earned_at: datetime | None = None
+
+
 class SolvedItem(BaseModel):
     slug: str
     title: str
@@ -363,14 +371,6 @@ class TestResultOut(BaseModel):
     model: str | None = None
     backup: bool = False
     cached: bool = False
-
-
-class BadgeOut(BaseModel):
-    key: str
-    name: str
-    icon: str
-    description: str
-    earned_at: datetime | None = None
 
 
 class RunOut(BaseModel):
