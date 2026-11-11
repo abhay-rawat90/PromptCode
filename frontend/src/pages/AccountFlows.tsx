@@ -203,3 +203,33 @@ export function VerifyBanner() {
     </div>
   );
 }
+
+/** Landing page for the "Stop streak reminders" link in reminder emails. Works without logging in. */
+export function Unsubscribe() {
+  const token = useOneTimeToken();
+  const { user, setUser } = useAuth();
+  const [state, setState] = useState<{ status: "working" | "ok" | "error"; message?: string }>({ status: "working" });
+  const ran = useRef(false);
+
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+    if (!token) return setState({ status: "error", message: "This page needs the link from a reminder email." });
+    api<{ detail: string }>(`/auth/unsubscribe?token=${encodeURIComponent(token)}`, { method: "POST" })
+      .then((r) => setState({ status: "ok", message: r.detail }))
+      .catch((e) => setState({ status: "error", message: (e as Error).message }));
+  }, [token]);
+
+  useEffect(() => {
+    if (state.status === "ok" && user?.reminder_emails) setUser({ ...user, reminder_emails: false });
+  }, [state.status, user, setUser]);
+
+  return (
+    <AuthShell title={state.status === "ok" ? "Reminders turned off" : state.status === "error" ? "Couldn't unsubscribe" : "One moment…"}>
+      {state.status === "working" && <p className="muted"><Spinner small /> Updating your settings…</p>}
+      {state.status === "ok" && <p className="muted">{state.message}</p>}
+      {state.status === "error" && <div className="alert error">{state.message}</div>}
+      <Link to={user ? "/settings" : "/"} className="btn ghost block">{user ? "Open Settings" : "Go to PromptCode"}</Link>
+    </AuthShell>
+  );
+}

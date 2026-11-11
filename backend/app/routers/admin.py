@@ -3,14 +3,14 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session, selectinload
 
 from .. import daily, llm
 from ..config import settings
 from ..db import get_db
-from ..models import ModelUsageDaily, Problem, ProblemReport, Submission, UsageDaily, User, utcnow
+from ..models import ModelUsageDaily, Problem, ProblemRating, ProblemReport, Submission, UsageDaily, User, utcnow
 from ..security import get_admin_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -173,6 +173,69 @@ def unhide_problem(problem_id: int, db: Session = Depends(get_db), admin: User =
     problem.hidden_reason = None
     db.commit()
     log.info("Admin %s restored problem %s (%r)", admin.username, problem.id, problem.title)
+
+
+# ---------- solver feedback ----------
+
+# A problem is flagged once this many solvers agree.
+MIN_FEEDBACK_VOTES = 3
+
+
+class ProblemFeedback(BaseModel):
+    slug: str
+    title: str
+    difficulty: str
+    likes: int
+    dislikes: int
+    easier: int
+    right: int
+    harder: int
+    flags: list[str]
+
+
+@router.get("/problem-feedback", response_model=list[ProblemFeedback])
+def problem_feedback(db: Session = Depends(get_db), _: User = Depends(get_admin_user)) -> list[ProblemFeedback]:
+    """Problems solvers dislike, or whose difficulty label they disagree with."""
+    def count(condition):
+        return func.sum(case((condition, 1), else_=0))
+
+    rows = db.execute(
+        select(
+            Problem.slug, Problem.title, Problem.difficulty,
+            count(ProblemRating.liked.is_(True)), count(ProblemRating.liked.is_(False)),
+            count(ProblemRating.difficulty == "easier"), count(ProblemRating.difficulty == "right"),
+            count(ProblemRating.difficulty == "harder"),
+        )
+        .join(ProblemRating, ProblemRating.problem_id == Problem.id)
+        .where(Problem.hidden_at.is_(None))
+        .group_by(Problem.id)
+    ).all()
+    out = []
+    for slug, title, difficulty, likes, dislikes, easier, right, harder in rows:
+        flags = []
+        if dislikes >= MIN_FEEDBACK_VOTES and dislikes > likes:
+            flags.append("Mostly disliked")
+        votes = easier + right + harder
+        if harder >= MIN_FEEDBACK_VOTES and harder * 2 > votes:
+            flags.append(f"Harder than '{difficulty}'")
+        if easier >= MIN_FEEDBACK_VOTES and easier * 2 > votes:
+            flags.append(f"Easier than '{difficulty}'")
+        if flags:
+            out.append(ProblemFeedback(slug=slug, title=title, difficulty=difficulty, likes=likes, dislikes=dislikes,
+                                       easier=easier, right=right, harder=harder, flags=flags))
+    out.sort(key=lambda f: f.dislikes - f.likes, reverse=True)
+    return out
+
+
+@router.post("/solutions/{submission_id}/remove", status_code=status.HTTP_204_NO_CONTENT)
+def remove_shared_solution(submission_id: int, db: Session = Depends(get_db), admin: User = Depends(get_admin_user)) -> None:
+    """Take an inappropriate shared solution out of the Solutions tab (the submission itself stays)."""
+    submission = db.get(Submission, submission_id)
+    if submission is None or not submission.shared:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Solution not found")
+    submission.shared = False
+    db.commit()
+    log.info("Admin %s removed shared solution %s", admin.username, submission_id)
 
 
 def _model_quotas(db: Session, today) -> tuple[list[ModelQuota], list[str]]:

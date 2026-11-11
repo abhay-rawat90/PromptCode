@@ -26,7 +26,7 @@ from . import grader, llm, usage
 from .config import settings
 from .db import SessionLocal
 from .models import DailyChallenge, DailyQueueItem, DailySolve, Problem, TestCase, User
-from .schemas import ProblemIn
+from .schemas import ProblemIn, safe_hints
 
 log = logging.getLogger("promptcode.daily")
 
@@ -107,6 +107,7 @@ def _build_problem(db: Session, spec: ProblemIn, day: date) -> Problem:
         # Queued and AI problems are verified before they get here.
         reference_prompt=spec.reference_prompt or None,
         verified_at=now() if spec.reference_prompt else None,
+        hints=spec.hints or None,
     )
     problem.test_cases = [TestCase(position=i, **tc.model_dump()) for i, tc in enumerate(spec.test_cases, start=1)]
     return problem
@@ -246,6 +247,7 @@ async def generate_verified(day: date) -> ProblemIn | None:
                 tags=generated.tags,
                 starter_prompt=generated.starter_prompt,
                 reference_prompt=generated.reference_prompt[: settings.max_prompt_chars],
+                hints=safe_hints(generated.hints, generated.description, generated.reference_prompt, generated.test_cases),
                 test_cases=[t.model_dump() for t in generated.test_cases],
             )
         except ValidationError as exc:
@@ -331,8 +333,14 @@ async def ensure_upcoming() -> None:
 
 
 async def scheduler(interval_seconds: int = 600) -> None:
+    from . import reminders  # imported here: reminders needs this module's clock
+
     while True:
         await ensure_upcoming()
+        try:
+            await asyncio.to_thread(reminders.send_due)
+        except Exception:  # noqa: BLE001 - never let the scheduler die
+            log.exception("Streak reminders failed")
         await asyncio.sleep(interval_seconds)
 
 

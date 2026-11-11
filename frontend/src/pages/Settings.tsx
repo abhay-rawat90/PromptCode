@@ -6,6 +6,7 @@ import { allPasswordRulesPass, PasswordChecklist, PasswordInput } from "../compo
 import { Avatar, ConfirmDialog, Spinner } from "../components/ui";
 import { useToast } from "../toast";
 import type { User } from "../types";
+import { useTitle } from "../useTitle";
 import { usernameError } from "../validation";
 
 function UsernameCard() {
@@ -189,7 +190,7 @@ function ApiKeyCard() {
       <p className="muted">
         PromptCode runs on shared free-tier AI quota. Add your own free key from{" "}
         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Google AI Studio</a> and your runs use it
-        instead: no daily test budget, no waiting for shared capacity, and always the main model.
+        instead, with no daily test budget and no waiting when the site is busy.
       </p>
       {user!.has_own_key ? (
         <>
@@ -217,6 +218,38 @@ function ApiKeyCard() {
       <ConfirmDialog open={confirmRemove} title="Remove your API key?" confirmLabel="Remove" danger busy={busy} onConfirm={remove} onCancel={() => setConfirmRemove(false)}>
         Your runs will go back to the site's shared models and daily test budget.
       </ConfirmDialog>
+    </div>
+  );
+}
+
+function RemindersCard() {
+  const { user, setUser } = useAuth();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  async function toggle(on: boolean) {
+    setBusy(true);
+    try {
+      setUser(await api<User>("/auth/me/preferences", { method: "PATCH", body: { reminder_emails: on } }));
+      toast(on ? "Streak reminders are on." : "Streak reminders are off.", "success");
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card settings-card" id="notifications">
+      <h2>Email notifications</h2>
+      <label className="toggle setting-toggle">
+        <input type="checkbox" checked={user!.reminder_emails} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+        <span>
+          <strong>Streak reminders</strong>
+          <span className="muted small">One email, a few hours before the daily problem resets, only on days your streak is about to end.</span>
+        </span>
+      </label>
+      {!user!.email_verified && <p className="muted small">Reminders are only sent to verified email addresses.</p>}
     </div>
   );
 }
@@ -258,6 +291,7 @@ function SessionsCard() {
 }
 
 export default function Settings() {
+  useTitle("Settings");
   return (
     <div className="page narrow-wide">
       <h1>Settings</h1>
@@ -265,6 +299,7 @@ export default function Settings() {
         <UsernameCard />
         <EmailCard />
         <PasswordCard />
+        <RemindersCard />
         <ApiKeyCard />
         <SessionsCard />
       </div>

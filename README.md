@@ -132,7 +132,7 @@ go much further:
 | What | How |
 |---|---|
 | Pacing | Each model's per-minute allowance is tracked. A burst of requests queues for a few seconds instead of failing, and users see "Waiting for free AI capacity…" with a countdown. |
-| Backup models | When the main Gemini model is out of quota, or busy for more than `FALLBACK_WAIT_SECONDS`, requests go to backups on separate free quotas (Groq's `gpt-oss` and `qwen` models with `GROQ_API_KEY`). Results say "Answered by gpt-oss-20b (backup model)". Daily problems are always verified on the main model. |
+| Backup models | When the main Gemini model is out of quota, or busy for more than `FALLBACK_WAIT_SECONDS`, requests go to backups on separate free quotas (Groq's `gpt-oss` and `qwen` models with `GROQ_API_KEY`). Solvers never see which model answered; admins do, on the admin page and in their own results. Daily problems are always verified on the main model. |
 | Cache | Identical requests (same model, prompt and input) reuse the stored answer for `LLM_CACHE_DAYS`: re-running a prompt, Submit re-checking samples that Run already did, and identical judge verdicts. Identical requests in flight at the same moment share one call. |
 | Early stop | Submit runs samples first, then hidden tests in small batches, and stops at the first failure. The rest show as "not run". Most submissions fail, so this saves a lot. |
 | Fair budgets | `DAILY_TEST_BUDGET` counts only real model calls. Cached answers and skipped tests are free. |
@@ -163,13 +163,15 @@ account menu then shows **Admin**, with:
 - every AI model's quota status (requests today, daily limit, cache hits, errors) and warnings;
 - tokens used per day, broken down by run, submit and daily generation;
 - today's biggest users, and the daily cap;
+- **Solver feedback**: problems that solvers mostly dislike, or whose difficulty they disagree with;
 - **Reports**: problems users flagged, where you can dismiss the reports, hide the problem, or
   restore a hidden one (hidden problems keep their submissions);
 - the daily-problem queue.
 
 ## Creating problems
 
-Only admins can create problems (**Create** in the top bar). To let every user create them, set
+Only admins can create problems (**Create** in the top bar). Admins can also edit any existing
+problem, including the starter and daily ones, for example to add hints. To let every user create them, set
 `ALLOW_USER_PROBLEMS=true`. While it's off, problems made earlier by non-admins are hidden
 everywhere but kept in the database, and turning it on brings them back.
 
@@ -252,6 +254,23 @@ For each test case:
 Keyboard shortcuts: `Ctrl/⌘+Enter` to run, `Ctrl/⌘+Shift+Enter` to submit. Drafts save
 automatically in your browser.
 
+## Solving experience
+
+| Feature | How it works |
+|---|---|
+| Editor | CodeMirror editor with line numbers, soft wrap, undo/redo and `{{input}}` highlighted. It shows a live character and estimated-token count, and **History** restores any of the last 10 versions you ran (kept in your browser). The split between description and editor is draggable. |
+| Hints | Up to 3 per problem, revealed one at a time from a gentle nudge to a stronger push. The server rejects a hint that contains the reference solution or a hidden test's input or answer. The starter problems have hand-written hints, new medium and hard dailies get them from the generator, and admins can write their own or click **✨ Suggest hints** (one AI request) in the problem form. |
+| Solutions tab | Locked until you solve the problem. It shows the official (reference) solution and prompts other solvers chose to share, shortest first, with upvotes. Sharing is off by default and you share one solution per problem. Admins can remove a shared solution. |
+| Ratings | Solvers can like or dislike a problem and say whether its difficulty label fits. The problem list shows the like percentage and can sort by it. The admin page flags problems that solvers mostly dislike or find mislabelled. |
+| Badges | Twelve achievements (first solve, 10/50/100 solved, 3/7/30-day streaks, every Easy, first Hard, One-Shot, Minimalist, Helper), computed from existing data, shown on profiles with a toast when earned. One-Shot needs an accepted first submission without opening a hint. |
+| Streak reminders | After `REMINDER_HOUR_UTC` (18:00 by default), users with a live streak who haven't solved today's daily get one email. They can turn it off in Settings or with the one-click link in the email. At most `REMINDER_DAILY_CAP` are sent a day, longest streaks first. |
+| Navigation | Filters and sorting live in the address bar, so Back returns to the same list. Problem pages have previous/next links, `/` focuses search, each page sets its tab title, and phones get a bottom tab bar. |
+
+**Streak reminders on Render's free plan:** the web service sleeps when idle, so the built-in
+scheduler may not be awake at the reminder hour. Add a Render Cron Job that runs
+`python -m app.reminders` at 18:00 UTC (it needs the same environment variables as the web
+service), or accept that reminders only go out while the site is awake.
+
 ## Configuration
 
 Every setting is documented in [backend/.env.example](backend/.env.example).
@@ -272,6 +291,9 @@ backend/
     llm_cache.py      stored answers for identical requests
     crypto.py         encryption of users' own API keys
     grader.py         check logic, parallel evaluation, early stop
+    community.py      hints revealed, ratings and list neighbours for a problem
+    badges.py         achievements
+    reminders.py      streak reminder emails (also `python -m app.reminders`)
     routers/          auth, problems, submissions/leaderboard, users (profiles)
 frontend/src/
   pages/              ProblemList, ProblemPage, ProblemForm, AuthPage, Settings, Profile, Submissions, Leaderboard

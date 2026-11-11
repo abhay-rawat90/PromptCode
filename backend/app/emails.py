@@ -26,6 +26,7 @@ class Email:
     subject: str
     text: str
     html: str
+    headers: dict[str, str] | None = None
 
 
 outbox: deque[Email] = deque(maxlen=50)
@@ -47,6 +48,7 @@ def send(message: Email) -> bool:
                 "subject": message.subject,
                 "text": message.text,
                 "html": message.html,
+                **({"headers": message.headers} if message.headers else {}),
             },
             timeout=10,
         )
@@ -59,9 +61,16 @@ def send(message: Email) -> bool:
     return True
 
 
-def _render(title: str, intro: str, button: str, link: str, outro: str) -> tuple[str, str]:
+def _render(title: str, intro: str, button: str, link: str, outro: str, unsubscribe: str | None = None) -> tuple[str, str]:
     text = f"{title}\n\n{intro}\n\n{button}: {link}\n\n{outro}\n\n- PromptCode"
     safe_link = html.escape(link, quote=True)
+    footer = ""
+    if unsubscribe:
+        text += f"\n\nStop these reminders: {unsubscribe}"
+        footer = (
+            '<p style="font-size:12px;line-height:1.5;margin:16px 0 0;color:#8e96a3">'
+            f'<a href="{html.escape(unsubscribe, quote=True)}" style="color:#8e96a3">Stop streak reminders</a></p>'
+        )
     body = f"""<!doctype html><html><body style="margin:0;background:#f6f7f9;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#1a1d23">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:32px 16px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#fff;border:1px solid #e2e5ea;border-radius:12px">
@@ -71,7 +80,7 @@ def _render(title: str, intro: str, button: str, link: str, outro: str) -> tuple
 <p style="font-size:15px;line-height:1.55;margin:0 0 22px;color:#3d434d">{html.escape(intro)}</p>
 <a href="{safe_link}" style="display:inline-block;background:#e8900c;color:#fff;text-decoration:none;font-weight:600;padding:11px 20px;border-radius:8px">{html.escape(button)}</a>
 <p style="font-size:13px;line-height:1.5;margin:22px 0 0;color:#646d7b">{html.escape(outro)}</p>
-<p style="font-size:12px;line-height:1.5;margin:16px 0 0;color:#8e96a3;word-break:break-all">Button not working? Paste this link into your browser:<br>{safe_link}</p>
+<p style="font-size:12px;line-height:1.5;margin:16px 0 0;color:#8e96a3;word-break:break-all">Button not working? Paste this link into your browser:<br>{safe_link}</p>{footer}
 </td></tr></table></td></tr></table></body></html>"""
     return text, body
 
@@ -80,7 +89,7 @@ def send_verification(to: str, username: str, token: str) -> bool:
     link = f"{settings.app_url}/verify-email?token={token}"
     text, body = _render(
         "Confirm your email",
-        f"Hi {username}, thanks for joining PromptCode! Confirm this is your email address so you can publish problems and recover your account.",
+        f"Hi {username}, thanks for joining PromptCode! Confirm this is your email address so you can recover your account if you ever lose your password.",
         "Confirm email",
         link,
         "This link expires in 48 hours. If you didn't create an account, you can ignore this email.",
@@ -98,3 +107,28 @@ def send_password_reset(to: str, username: str, token: str) -> bool:
         "This link expires in 1 hour and can be used once. If you didn't ask for this, ignore this email - your password stays the same.",
     )
     return send(Email(to, "Reset your PromptCode password", text, body))
+
+
+def send_streak_reminder(
+    to: str, username: str, streak: int, hours_left: int, slug: str, title: str, unsubscribe_token: str
+) -> bool:
+    days = f"{streak}-day streak"
+    hours = f"{hours_left} hour{'s' if hours_left != 1 else ''}"
+    unsubscribe_page = f"{settings.app_url}/unsubscribe?token={unsubscribe_token}"
+    text, body = _render(
+        f"Your {days} ends in {hours}",
+        f"Hi {username}, you haven't solved today's daily problem yet: \"{title}\". "
+        f"Solve it before midnight UTC to keep your {days} going.",
+        "Solve today's problem",
+        f"{settings.app_url}/problems/{slug}",
+        "You get this email because you have an active streak. You can turn reminders off in Settings.",
+        unsubscribe=unsubscribe_page,
+    )
+    return send(Email(
+        to, f"\U0001F525 Your {days} ends in {hours}", text, body,
+        # Lets mail apps show a one-click "Unsubscribe" button.
+        headers={
+            "List-Unsubscribe": f"<{settings.app_url}/api/auth/unsubscribe?token={unsubscribe_token}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
+    ))

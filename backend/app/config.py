@@ -122,6 +122,13 @@ class Settings:
     daily_model: str = os.getenv("DAILY_MODEL", "gemini-3.6-flash")
     daily_generation_attempts: int = int(os.getenv("DAILY_GENERATION_ATTEMPTS", "3"))
 
+    # ---- streak reminder emails ----
+    # Once a day, after this UTC hour, email users whose streak is about to end.
+    reminders_enabled: bool = _bool("REMINDERS_ENABLED", True)
+    reminder_hour_utc: int = int(os.getenv("REMINDER_HOUR_UTC", "18"))
+    # Most reminders sent per day (Resend's free plan allows 100 emails a day in total).
+    reminder_daily_cap: int = int(os.getenv("REMINDER_DAILY_CAP", "90"))
+
     # Hard limits that keep a single run cheap.
     max_prompt_chars: int = 8000
     max_tests_per_problem: int = 20

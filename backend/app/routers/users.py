@@ -3,7 +3,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from .. import daily
+from .. import badges, daily
 from ..models import DailySolve, Problem, Submission, User
 from ..schemas import ProfileOut, SolvedItem
 
@@ -63,5 +63,6 @@ def profile(username: str, db: Session = Depends(get_db)) -> ProfileOut:
         current_streak=daily.effective_streak(user),
         best_streak=user.best_streak,
         dailies_solved=db.scalar(select(func.count()).where(DailySolve.user_id == user.id)) or 0,
+        badges=badges.for_profile(db, user),
     )
 

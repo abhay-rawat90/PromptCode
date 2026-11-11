@@ -122,6 +122,16 @@ def test_publishing_and_editing_require_passing_verification(make_client, fake_l
     assert admin.put(f"/api/problems/{slug}", json=problem(title="Good One", reference="wrong")).status_code == 422
     assert admin.put(f"/api/problems/{slug}", json=problem(title="Good One v2")).status_code == 200
 
+    # Admins can edit problems they didn't write (built-in and daily problems have no author),
+    # e.g. to add hints. Other users can't.
+    other_admin = make_client("second_admin", admin=True)
+    assert other_admin.get(f"/api/problems/{slug}").json()["can_edit"] is True
+    edited = other_admin.put(f"/api/problems/{slug}", json=problem(title="Good One v2", hints=["Say yes."]))
+    assert edited.status_code == 200 and edited.json()["hint_count"] == 1
+    outsider = make_client("not_the_author")
+    assert outsider.get(f"/api/problems/{slug}").json()["can_edit"] is False
+    assert outsider.get(f"/api/problems/{slug}/full").status_code == 403
+
 
 # ---------- B3: reports and moderation ----------
 

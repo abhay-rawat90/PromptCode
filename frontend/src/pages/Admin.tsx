@@ -7,6 +7,7 @@ import { ConfirmDialog, EmptyState, ErrorState, Skeleton } from "../components/u
 import { useToast } from "../toast";
 import type { QueueItem } from "../types";
 import { useApi } from "../useApi";
+import { useTitle } from "../useTitle";
 
 interface UsageDay {
   day: string;
@@ -196,7 +197,49 @@ function ReportsCard({ onChange }: { onChange: () => void }) {
   );
 }
 
+interface ProblemFeedback {
+  slug: string;
+  title: string;
+  difficulty: string;
+  likes: number;
+  dislikes: number;
+  easier: number;
+  right: number;
+  harder: number;
+  flags: string[];
+}
+
+function FeedbackCard() {
+  const feedback = useApi<ProblemFeedback[]>("/admin/problem-feedback");
+  return (
+    <div className="card">
+      <h2>Solver feedback</h2>
+      <p className="muted small">Problems that solvers mostly dislike, or whose difficulty label they disagree with (3 or more votes).</p>
+      {feedback.error && <ErrorState message={feedback.error} onRetry={feedback.reload} busy={feedback.loading} />}
+      {feedback.data?.length === 0 && <p className="muted">Nothing flagged. Solvers are happy with the problems.</p>}
+      {feedback.data && feedback.data.length > 0 && (
+        <div className="table-wrap">
+          <table className="table compact">
+            <thead><tr><th>Problem</th><th>Flag</th><th className="num">👍 / 👎</th><th className="num">Easier / right / harder</th></tr></thead>
+            <tbody>
+              {feedback.data.map((f) => (
+                <tr key={f.slug}>
+                  <td><Link to={`/problems/${f.slug}`}>{f.title}</Link></td>
+                  <td>{f.flags.map((flag) => <span key={flag} className="pill-warn">{flag}</span>)}</td>
+                  <td className="num">{f.likes} / {f.dislikes}</td>
+                  <td className="num">{f.easier} / {f.right} / {f.harder}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Admin() {
+  useTitle("Admin");
   const toast = useToast();
   const usage = useApi<UsageReport>("/admin/usage?days=14");
   const queue = useApi<QueueItem[]>("/admin/daily/queue");
@@ -243,6 +286,8 @@ export default function Admin() {
           </div>
 
           <ReportsCard onChange={usage.reload} />
+
+          <FeedbackCard />
 
           <ModelQuotas models={report.models} />
 

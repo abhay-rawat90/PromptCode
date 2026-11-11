@@ -62,6 +62,7 @@ def generated(title="Shouting Echo", expected_transform=str.upper, reference="SH
         tags=["format"],
         starter_prompt="",
         reference_prompt=reference,
+        hints=["Say exactly what the output must look like.", f"The answer for the hidden word is {expected_transform('charlie')}{'!' * 12}"],
         test_cases=[
             llm.GeneratedTest(input=w, check_type="exact", expected=expected_transform(w), case_sensitive=True, is_sample=i < 2)
             for i, w in enumerate(words)

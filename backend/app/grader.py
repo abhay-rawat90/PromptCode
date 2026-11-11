@@ -85,9 +85,10 @@ class CaseResult:
     cached: bool = False  # output came from the cache
     executed: bool = False  # a real model call was spent on the output (counts toward budgets)
 
-    def public(self, case: TestCase, reveal: bool = False) -> dict:
+    def public(self, case: TestCase, reveal: bool = False, internal: bool = False) -> dict:
         """Serialized result. Hidden tests reveal only pass/fail (and infra errors), unless
-        `reveal` (the problem's author verifying it)."""
+        `reveal` (the problem's author verifying it). Which model answered and whether the answer
+        was cached are behind-the-scenes details: only included when `internal` (admins)."""
         data = {
             "test_id": self.test_id,
             "position": self.position,
@@ -100,9 +101,9 @@ class CaseResult:
             "expected": None,
             "output": None,
             "detail": self.detail if (reveal or self.is_sample or self.error or self.skipped) else None,
-            "model": llm.display_name(self.model) if self.model else None,
-            "backup": self.backup,
-            "cached": self.cached,
+            "model": llm.display_name(self.model) if internal and self.model else None,
+            "backup": internal and self.backup,
+            "cached": internal and self.cached,
         }
         if self.is_sample or reveal:
             data.update(input=case.input, expected=case.expected, output=self.output)

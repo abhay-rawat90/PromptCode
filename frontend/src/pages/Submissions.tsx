@@ -7,8 +7,10 @@ import { EmptyState, ErrorState, Skeleton } from "../components/ui";
 import { useToast } from "../toast";
 import type { Submission, SubmissionDetail } from "../types";
 import { useApi } from "../useApi";
+import { useTitle } from "../useTitle";
 
 export default function Submissions() {
+  useTitle("My submissions");
   const { data: items, error, loading, reload } = useApi<Submission[]>("/submissions?limit=100");
   const [open, setOpen] = useState<SubmissionDetail | null>(null);
   const toast = useToast();

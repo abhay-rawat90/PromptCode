@@ -3,10 +3,12 @@ import { useAuth } from "../auth";
 import { Avatar, EmptyState, ErrorState, Skeleton } from "../components/ui";
 import type { LeaderboardEntry } from "../types";
 import { useApi } from "../useApi";
+import { useTitle } from "../useTitle";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 export default function Leaderboard() {
+  useTitle("Leaderboard");
   const { user } = useAuth();
   const { data: rows, error, loading, reload } = useApi<LeaderboardEntry[]>("/leaderboard");
 

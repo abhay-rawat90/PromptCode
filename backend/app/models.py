@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, false, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, false, func, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -46,6 +46,9 @@ class User(Base):
     # The user's own Gemini API key, encrypted (see crypto.py), plus its last 4 characters for display.
     gemini_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     gemini_key_hint: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Streak reminder emails: opt-out, and the day the last one was sent (at most one a day).
+    reminder_emails: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    last_reminded: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
 # Usernames are unique regardless of case ("Alice" and "alice" can't both exist).
@@ -74,6 +77,8 @@ class Problem(Base):
     # Taken down by an admin (e.g. after reports). Hidden from everyone but admins.
     hidden_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     hidden_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Up to 3 hints, gentlest first. Solvers reveal them one at a time.
+    hints: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     author: Mapped[User | None] = relationship()
     daily: Mapped["DailyChallenge | None"] = relationship(back_populates="problem", uselist=False)
@@ -127,6 +132,8 @@ class Submission(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # The author chose to show this accepted prompt in the problem's Solutions tab.
+    shared: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
 
     user: Mapped[User] = relationship()
     problem: Mapped[Problem] = relationship(back_populates="submissions")
@@ -216,6 +223,57 @@ class ProblemReport(Base):
 
     problem: Mapped[Problem] = relationship()
     user: Mapped[User] = relationship()
+
+
+class HintOpen(Base):
+    """How many of a problem's hints a user has revealed."""
+
+    __tablename__ = "hint_opens"
+    __table_args__ = (UniqueConstraint("user_id", "problem_id", name="uq_hint_opens_user_problem"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"))
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class SolutionVote(Base):
+    """An upvote on a shared solution (a Submission with shared=True)."""
+
+    __tablename__ = "solution_votes"
+    __table_args__ = (UniqueConstraint("submission_id", "user_id", name="uq_solution_votes_submission_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("submissions.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class ProblemRating(Base):
+    """A solver's opinion of a problem: liked or not, and whether its difficulty label fits."""
+
+    __tablename__ = "problem_ratings"
+    __table_args__ = (UniqueConstraint("problem_id", "user_id", name="uq_problem_ratings_problem_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    liked: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    difficulty: Mapped[str | None] = mapped_column(String(10), nullable=True)  # easier | right | harder
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class UserBadge(Base):
+    """An achievement a user has earned (see badges.py). Kept once earned."""
+
+    __tablename__ = "user_badges"
+    __table_args__ = (UniqueConstraint("user_id", "badge", name="uq_user_badges_user_badge"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    badge: Mapped[str] = mapped_column(String(30))
+    earned_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class ModelUsageDaily(Base):

@@ -15,7 +15,7 @@ from .config import settings
 from .db import SessionLocal
 from .migrations import upgrade_database
 from . import daily
-from .routers import admin, auth, daily as daily_routes, problems, submissions, users
+from .routers import admin, auth, community, daily as daily_routes, problems, submissions, users
 from .security import SESSION_COOKIE, csrf_ok
 from .seed import seed
 
@@ -151,6 +151,7 @@ async def validation_error(request: Request, exc: RequestValidationError) -> JSO
 
 app.include_router(auth.router)
 app.include_router(problems.router)
+app.include_router(community.router)
 app.include_router(submissions.router)
 app.include_router(users.router)
 app.include_router(daily_routes.router)

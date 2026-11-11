@@ -5,6 +5,7 @@ import { DailyCard, formatDay, StreakChip } from "../components/Daily";
 import { EmptyState, ErrorState, Skeleton } from "../components/ui";
 import type { DailyArchiveItem } from "../types";
 import { useApi } from "../useApi";
+import { useTitle } from "../useTitle";
 
 function StatusIcon({ item }: { item: DailyArchiveItem }) {
   if (item.solved_on_day) return <span className="arch-status on-day" title="Solved on the day">✓</span>;
@@ -13,6 +14,7 @@ function StatusIcon({ item }: { item: DailyArchiveItem }) {
 }
 
 export default function DailyArchive() {
+  useTitle("Daily challenges");
   const { user } = useAuth();
   const { data, error, loading, reload } = useApi<DailyArchiveItem[]>("/daily/archive?limit=120", user?.id);
   const onDay = data?.filter((d) => d.solved_on_day).length ?? 0;

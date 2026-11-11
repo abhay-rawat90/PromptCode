@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import crypto, emails, llm, ratelimit, tokens
+from .. import crypto, emails, llm, ratelimit, reminders, tokens
 from ..config import settings
 from ..db import get_db
 from ..models import User, utcnow
@@ -24,6 +24,7 @@ from ..schemas import (
     LoginIn,
     MeOut,
     PasswordChangeIn,
+    PreferencesIn,
     RegisterIn,
     UsernameAvailability,
     UsernameChangeIn,
@@ -285,6 +286,28 @@ def delete_gemini_key(db: Session = Depends(get_db), user: User = Depends(get_cu
     user.gemini_key_hint = None
     db.commit()
     return MeOut.of(user)
+
+
+@router.patch("/me/preferences", response_model=MeOut)
+def update_preferences(
+    body: PreferencesIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> MeOut:
+    user.reminder_emails = body.reminder_emails
+    db.commit()
+    return MeOut.of(user)
+
+
+@router.post("/unsubscribe")
+def unsubscribe(token: str = Query(max_length=200), db: Session = Depends(get_db)) -> dict:
+    """Turn off streak reminders from the link in a reminder email (no login needed). Mail apps
+    also call this directly for their one-click "Unsubscribe" button."""
+    user_id = reminders.user_id_from_token(token)
+    user = db.get(User, user_id) if user_id is not None else None
+    if user is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This unsubscribe link isn't valid.")
+    user.reminder_emails = False
+    db.commit()
+    return {"detail": "Streak reminders are off. You can turn them back on in Settings."}
 
 
 # ---------- email verification & password reset ----------

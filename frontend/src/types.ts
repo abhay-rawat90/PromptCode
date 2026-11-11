@@ -17,6 +17,8 @@ export interface User {
   /** The user saved their own Gemini API key (shown as its last 4 characters). */
   has_own_key: boolean;
   own_key_hint: string | null;
+  /** Streak reminder emails are on. */
+  reminder_emails: boolean;
   /** One-off security/info message returned by some auth endpoints. */
   notice?: string | null;
 }
@@ -52,6 +54,51 @@ export interface ProblemSummary {
   attempted: boolean;
   submissions: number;
   acceptance: number | null;
+  /** Share of ratings that are likes; null until someone rates. */
+  like_pct: number | null;
+  ratings: number;
+  has_hints: boolean;
+  is_daily: boolean;
+}
+
+export type DifficultyVote = "easier" | "right" | "harder";
+
+export interface MyRating {
+  liked: boolean | null;
+  difficulty: DifficultyVote | null;
+}
+
+export interface RatingSummary {
+  likes: number;
+  dislikes: number;
+  my_rating: MyRating | null;
+}
+
+export interface Badge {
+  key: string;
+  name: string;
+  icon: string;
+  description: string;
+  earned_at: string | null;
+}
+
+export interface Solution {
+  id: number;
+  username: string;
+  avatar_url: string | null;
+  prompt: string;
+  tokens: number;
+  votes: number;
+  voted: boolean;
+  mine: boolean;
+  created_at: string;
+}
+
+export interface Solutions {
+  official: string | null;
+  community: Solution[];
+  my_best_id: number | null;
+  my_shared_id: number | null;
 }
 
 export interface ProblemDetail {
@@ -72,6 +119,14 @@ export interface ProblemDetail {
   verified: boolean;
   /** Only for admins viewing a problem they took down. */
   hidden_reason: string | null;
+  hint_count: number;
+  /** The hints this user has revealed so far. */
+  hints: string[];
+  likes: number;
+  dislikes: number;
+  my_rating: MyRating | null;
+  prev_slug: string | null;
+  next_slug: string | null;
 }
 
 export interface ProblemInput {
@@ -82,6 +137,8 @@ export interface ProblemInput {
   starter_prompt: string;
   /** Private solution that must pass every test before publishing. */
   reference_prompt: string;
+  /** Up to 3 hints, gentlest first. */
+  hints: string[];
   test_cases: TestCaseInput[];
 }
 
@@ -98,12 +155,6 @@ export interface TestResult {
   detail: string | null;
   /** Not run because Submit stopped at an earlier failing test. */
   skipped?: boolean;
-  /** Model that produced the output, e.g. "gemini-3.5-flash-lite". */
-  model?: string | null;
-  /** Graded by a backup model because the main one was at its free-tier limit. */
-  backup?: boolean;
-  /** Served from the answer cache (no quota spent). */
-  cached?: boolean;
 }
 
 export interface RunResult {
@@ -117,10 +168,9 @@ export interface RunResult {
   daily_remaining?: number | null;
   streak_extended?: boolean;
   current_streak?: number | null;
-  backup_models?: string[];
-  cached?: number;
   skipped?: number;
-  own_key?: boolean;
+  /** Achievements this submission unlocked. */
+  new_badges?: Badge[];
 }
 
 export interface VerifyResult extends RunResult {
@@ -134,7 +184,7 @@ export type ReportReason = "wrong_tests" | "unclear" | "other";
 export type RunProgress =
   | { type: "start"; total: number }
   | { type: "progress"; done: number; total: number; passed: boolean }
-  | { type: "waiting"; model: string; seconds: number; queue: number };
+  | { type: "waiting"; seconds: number; queue: number };
 
 export interface Submission {
   id: number;
@@ -146,6 +196,8 @@ export interface Submission {
   input_tokens: number;
   output_tokens: number;
   created_at: string;
+  /** Shown in the problem's Solutions tab. */
+  shared?: boolean;
 }
 
 export interface SubmissionDetail extends Submission {
@@ -173,6 +225,8 @@ export interface Profile {
   current_streak: number;
   best_streak: number;
   dailies_solved: number;
+  /** Every badge; earned_at is null for ones not earned yet. */
+  badges: Badge[];
 }
 
 export interface DailyProblem {

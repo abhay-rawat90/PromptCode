@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import ResultsPanel from "../components/ResultsPanel";
 import { EmptyState, Skeleton, Spinner } from "../components/ui";
 import { useToast } from "../toast";
+import { useTitle } from "../useTitle";
 import {
   CHECK_LABELS,
   EXPECTED_HINTS,
@@ -33,6 +34,7 @@ const blankProblem: ProblemInput = {
   tags: [],
   starter_prompt: "",
   reference_prompt: "",
+  hints: [],
   test_cases: [blankTest(true)],
 };
 
@@ -43,11 +45,13 @@ function FieldError({ msg }: { msg?: string }) {
 export default function ProblemForm() {
   const { slug } = useParams();
   const editing = Boolean(slug);
+  useTitle(editing ? "Edit problem" : "Create a problem");
   const navigate = useNavigate();
   const toast = useToast();
   const { user, config } = useAuth();
   const [toQueue, setToQueue] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
   const [verifyProgress, setVerifyProgress] = useState<{ done: number; total: number } | null>(null);
   // The last verification and the exact form contents it checked: editing anything needs a re-verify.
   const [verified, setVerified] = useState<{ result: VerifyResult; snapshot: string } | null>(null);
@@ -64,7 +68,7 @@ export default function ProblemForm() {
     if (!slug) return;
     api<ProblemInput & { slug: string }>(`/problems/${slug}/full`)
       .then((p) => {
-        setForm(p);
+        setForm({ ...p, hints: p.hints ?? [] });
         setTagsText(p.tags.join(", "));
         setLoaded(true);
       })
@@ -97,8 +101,33 @@ export default function ProblemForm() {
     return e;
   }
 
-  const body = () => ({ ...form, tags: tagsText.split(",").map((t) => t.trim()).filter(Boolean) });
-  const snapshot = JSON.stringify(body());
+  const body = () => ({
+    ...form,
+    hints: form.hints.map((h) => h.trim()).filter(Boolean),
+    tags: tagsText.split(",").map((t) => t.trim()).filter(Boolean),
+  });
+
+  async function suggestHints() {
+    setFormError(null);
+    setSuggesting(true);
+    try {
+      const res = await api<{ hints: string[] }>("/problems/suggest-hints", { method: "POST", body: body() });
+      if (res.hints.length) {
+        set("hints", res.hints);
+        toast("Hints suggested. Read and edit them before publishing.", "success");
+      } else {
+        toast("No usable hints came back. Try again, or write your own.", "info");
+      }
+    } catch (err) {
+      const apiErr = err as ApiError;
+      if (Object.keys(apiErr.fields).length) setErrors(apiErr.fields);
+      toast(Object.keys(apiErr.fields).length ? "Fill in the problem first, then ask for hints." : apiErr.message, "error");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+  // Hints don't affect the tests, so editing them doesn't require verifying again.
+  const snapshot = JSON.stringify({ ...body(), hints: undefined });
   const isVerified = Boolean(verified?.result.ok && verified.snapshot === snapshot);
   const isStale = Boolean(verified && verified.snapshot !== snapshot);
 
@@ -235,6 +264,32 @@ export default function ProblemForm() {
               <p className="field-hint">Never shown to solvers. Before publishing it must pass every test, and a prompt that just repeats the input must fail.</p>
             )}
           </div>
+        </div>
+
+        <div className="card">
+          <div className="hints-head">
+            <div>
+              <h2>Hints <span className="muted small">(optional, up to 3)</span></h2>
+              <p className="muted small">Solvers reveal them one at a time, so order them from a gentle nudge to a stronger push. A hint must not give away the solution or a hidden test.</p>
+            </div>
+            <button type="button" className="btn ghost small" onClick={suggestHints} disabled={suggesting} title="Uses one AI request">
+              {suggesting ? <><Spinner small /> Thinking</> : "✨ Suggest hints"}
+            </button>
+          </div>
+          {form.hints.map((hint, i) => (
+            <div className="field" key={i}>
+              <label htmlFor={`hint-${i}`}>Hint {i + 1}</label>
+              <div className="hint-row">
+                <textarea id={`hint-${i}`} rows={2} maxLength={500} value={hint}
+                  onChange={(e) => set("hints", form.hints.map((h, j) => (j === i ? e.target.value : h)))} />
+                <button type="button" className="btn ghost small" onClick={() => set("hints", form.hints.filter((_, j) => j !== i))}>Remove</button>
+              </div>
+            </div>
+          ))}
+          <FieldError msg={errors.hints ?? errors[""]} />
+          {form.hints.length < 3 && (
+            <button type="button" className="btn ghost dashed" onClick={() => set("hints", [...form.hints, ""])}>+ Add hint</button>
+          )}
         </div>
 
         <div className="section-head">

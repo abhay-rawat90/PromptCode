@@ -9,12 +9,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from .. import crypto, daily, grader, llm, ratelimit, usage
+from .. import badges, community, crypto, daily, grader, llm, ratelimit, usage
 from ..config import settings
 from ..security import get_current_user, get_optional_user
 from ..db import SessionLocal, get_db
 from ..models import Problem, ProblemReport, Submission, TestCase, User, utcnow
 from ..schemas import (
+    BadgeOut,
+    HintSuggestions,
     ProblemDetail,
     ProblemFull,
     ProblemIn,
@@ -22,6 +24,7 @@ from ..schemas import (
     ReportIn,
     RunIn,
     RunOut,
+    safe_hints,
     VerifyOut,
     TestCaseIn,
     TestCaseOut,
@@ -58,8 +61,13 @@ def _get_problem(db: Session, slug: str, user: User | None = None) -> Problem:
     return problem
 
 
+def _can_edit(problem: Problem, user: User | None) -> bool:
+    """Authors edit their own problems; admins edit any (built-in and daily ones have no author)."""
+    return user is not None and (user.is_admin or problem.author_id == user.id)
+
+
 def _require_author(problem: Problem, user: User) -> None:
-    if problem.author_id != user.id:
+    if not _can_edit(problem, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the author can modify this problem")
 
 
@@ -80,6 +88,7 @@ def _apply(problem: Problem, body: ProblemIn) -> None:
     problem.tags = ",".join(body.tags)
     problem.starter_prompt = body.starter_prompt
     problem.reference_prompt = body.reference_prompt
+    problem.hints = body.hints or None
     problem.verified_at = utcnow()  # only called after verification passed
     problem.test_cases = [
         TestCase(position=i, **tc.model_dump()) for i, tc in enumerate(body.test_cases, start=1)
@@ -127,16 +136,30 @@ async def verify_problem(body: ProblemIn, request: Request, user: User = Depends
         raise HTTPException(422, NEEDS_REFERENCE)
     key = _user_key(user)
     _precheck("verify_user", user, len(body.test_cases), key)
-    user_id = user.id
+    user_id, internal = user.id, user.is_admin
     cases = daily.unsaved_cases(body)
 
     async def work() -> VerifyOut:
         result = await _verification(body, user_id, key)
-        out = _run_out(result.reference, cases, user_id, key, reveal=True)
+        out = _run_out(result.reference, cases, user_id, key, reveal=True, internal=internal)
         problems = [f"Couldn't finish verifying: {result.infra_error}"] if result.infra_error else result.problems
         return VerifyOut(**out.model_dump(), ok=result.ok, problems=problems)
 
     return await _respond(request, work, len(cases))
+
+
+@router.post("/suggest-hints", response_model=HintSuggestions)
+async def suggest_hints(body: ProblemIn, user: User = Depends(get_current_user)) -> HintSuggestions:
+    """Ask the AI for up to 3 hints for the problem in the form (one model call). The author
+    reviews and edits them before saving."""
+    _require_creator(user)
+    ratelimit.enforce("suggest_hints_user", str(user.id), message="You've asked for a lot of hint suggestions. Try again later.")
+    usage.enforce_daily_cap()
+    with usage.attribute("other", user.id):
+        hints, error = await llm.suggest_hints(body)
+    if error:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"Couldn't suggest hints right now: {error}")
+    return HintSuggestions(hints=safe_hints(hints, body.description, body.reference_prompt, body.test_cases))
 
 
 def _solved_ids(db: Session, user: User | None) -> set[int]:
@@ -162,7 +185,7 @@ def list_problems(
     stmt = (
         select(Problem)
         .where(daily.visible_problem_clause())
-        .options(selectinload(Problem.author))
+        .options(selectinload(Problem.author), selectinload(Problem.daily))
         .order_by(Problem.id)
     )
     if q:
@@ -182,6 +205,7 @@ def list_problems(
             ).group_by(Submission.problem_id)
         )
     }
+    likes = community.like_stats(db)
     solved = _solved_ids(db, user)
     attempted = (
         set(db.scalars(select(Submission.problem_id).where(Submission.user_id == user.id).distinct()))
@@ -204,6 +228,10 @@ def list_problems(
                 attempted=p.id in attempted,
                 submissions=total,
                 acceptance=round(100 * accepted / total, 1) if total else None,
+                like_pct=round(100 * likes[p.id][0] / likes[p.id][1]) if p.id in likes else None,
+                ratings=likes[p.id][1] if p.id in likes else 0,
+                has_hints=bool(p.hints),
+                is_daily=p.daily is not None,
             )
         )
     return out
@@ -220,6 +248,10 @@ def get_problem(
     return ProblemDetail(
         verified=p.verified_at is not None,
         hidden_reason=(p.hidden_reason or "Hidden by an admin.") if p.hidden_at else None,
+        hint_count=len(p.hints or []),
+        hints=community.opened_hints(db, user, p),
+        **community.rating_summary(db, p.id, user),
+        **community.neighbours(db, p),
         id=p.id,
         slug=p.slug,
         title=p.title,
@@ -230,7 +262,7 @@ def get_problem(
         author=p.author.username if p.author else None,
         sample_tests=[TestCaseOut.model_validate(t, from_attributes=True) for t in samples],
         hidden_count=len(p.test_cases) - len(samples),
-        can_edit=user is not None and p.author_id == user.id,
+        can_edit=_can_edit(p, user),
         solved=p.id in _solved_ids(db, user),
         daily_day=p.daily.day if p.daily else None,
     )
@@ -250,6 +282,7 @@ def get_problem_full(
         tags=p.tag_list,
         starter_prompt=p.starter_prompt,
         reference_prompt=p.reference_prompt or "",
+        hints=p.hints or [],
         test_cases=[TestCaseIn.model_validate(t, from_attributes=True) for t in p.test_cases],
     )
 
@@ -326,12 +359,12 @@ async def run_samples(
     cases = [t for t in problem.test_cases if t.is_sample]
     key = _user_key(user)
     _precheck("run_user", user, len(cases), key)
-    user_id = user.id
+    user_id, internal = user.id, user.is_admin
     db.close()  # don't hold a database connection while the model works
 
     async def work() -> RunOut:
         result = await _grade("run", user_id, body.prompt, cases, key)
-        return _run_out(result, cases, user_id, key)
+        return _run_out(result, cases, user_id, key, internal=internal)
 
     return await _respond(request, work, len(cases))
 
@@ -350,12 +383,12 @@ async def submit(
     cases = list(problem.test_cases)
     key = _user_key(user)
     _precheck("submit_user", user, len(cases), key)
-    user_id, problem_id = user.id, problem.id
+    user_id, problem_id, internal = user.id, problem.id, user.is_admin
     db.close()
 
     async def work() -> RunOut:
         result = await _grade("submit", user_id, body.prompt, cases, key)
-        out = _run_out(result, cases, user_id, key)
+        out = _run_out(result, cases, user_id, key, internal=internal)
         _save_submission(user_id, problem_id, body.prompt, out)
         return out
 
@@ -413,22 +446,26 @@ def _save_submission(user_id: int, problem_id: int, prompt: str, out: RunOut) ->
             if user and problem and daily.record_solve(db, user, problem):
                 out.streak_extended = True
                 out.current_streak = user.current_streak
+            if user:
+                out.new_badges = [BadgeOut(**b) for b in badges.evaluate(db, user)]
 
 
 def _run_out(
-    result: grader.EvalResult, cases: list[TestCase], user_id: int, own_key: str | None, reveal: bool = False
+    result: grader.EvalResult, cases: list[TestCase], user_id: int, own_key: str | None, reveal: bool = False,
+    internal: bool = False,
 ) -> RunOut:
+    """`internal` (admins) adds which model answered and cache hits; solvers never see those."""
     by_id = {c.id: c for c in cases}
     return RunOut(
         daily_remaining=None if own_key else ratelimit.remaining("daily_tests_user", str(user_id)),
         status=result.status,
         passed=result.passed,
         total=len(result.cases),
-        results=[r.public(by_id[r.test_id], reveal) for r in result.cases],
+        results=[r.public(by_id[r.test_id], reveal, internal) for r in result.cases],
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
-        backup_models=result.backup_models,
-        cached=sum(c.cached for c in result.cases),
+        backup_models=result.backup_models if internal else [],
+        cached=sum(c.cached for c in result.cases) if internal else 0,
         skipped=sum(c.skipped for c in result.cases),
         own_key=bool(own_key),
     )
@@ -447,8 +484,12 @@ async def _respond(request: Request, work: Callable[[], Awaitable[RunOut]], tota
 
     events: asyncio.Queue[dict] = asyncio.Queue()
 
+    def on_event(event: dict) -> None:
+        # Which model is busy is a behind-the-scenes detail: solvers only need "queued, ~12s".
+        events.put_nowait({k: v for k, v in event.items() if k != "model"})
+
     async def run() -> RunOut:
-        with llm.listen(events.put_nowait):
+        with llm.listen(on_event):
             return await work()
 
     # Started now (not when the client reads) and kept running if the client disconnects,

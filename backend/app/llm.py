@@ -778,6 +778,7 @@ class GeneratedProblem(BaseModel):
     tags: list[str]
     starter_prompt: str
     reference_prompt: str
+    hints: list[str]
     test_cases: list[GeneratedTest]
 
 
@@ -810,6 +811,10 @@ Requirements:
   llm_judge tests. Expected values must be unambiguous - one correct answer per test.
 - `reference_prompt` is a strong solution that passes EVERY test. `starter_prompt` is a weak but
   sensible first attempt (or empty).
+- `hints`: for medium and hard problems, 2-3 short hints ordered from a gentle nudge to a stronger
+  push. Each points at a prompting technique or a trap to watch for. A hint never contains the
+  reference prompt, a complete solution, or any hidden test's input or expected value. For easy
+  problems use an empty list.
 - The problem must NOT be passable by a prompt that just repeats the input.
 - Tests must not depend on facts after 2023, live data, randomness, or long outputs (keep each
   expected output under ~150 words).
@@ -817,7 +822,7 @@ Requirements:
   different from the existing titles you are given.
 
 Answer with a single JSON object with the fields: title, description, difficulty, tags,
-starter_prompt, reference_prompt, test_cases (each: input, check_type, expected, case_sensitive,
+starter_prompt, reference_prompt, hints, test_cases (each: input, check_type, expected, case_sensitive,
 is_sample)."""
 
 
@@ -836,3 +841,47 @@ async def generate_problem(brief: str) -> tuple[GeneratedProblem | None, str | N
     if not isinstance(problem, GeneratedProblem):
         return None, completion.blocked or "Generator did not return a problem.", result
     return problem, None, result
+
+
+# ---------- hint suggestions ----------
+
+class HintList(BaseModel):
+    hints: list[str]
+
+
+HINTS_SYSTEM = """You write hints for PromptCode, a site where people practice prompt engineering by
+writing a prompt that must pass automatic tests.
+Given a problem, its sample tests and a working reference prompt, write exactly 3 hints for someone
+who is stuck, ordered from a gentle nudge to a stronger push:
+1. what to pay attention to in the task or its output format;
+2. a prompting technique that helps (for example stating the exact output format, giving the
+   allowed labels, handling an edge case explicitly, or forbidding extra text);
+3. a concrete push toward the structure of a good prompt, still without writing it.
+Rules: each hint is one or two sentences. Never quote or closely paraphrase the reference prompt,
+never give a complete prompt, and never mention the input or expected value of a hidden test.
+Answer as JSON: {"hints": ["...", "...", "..."]}."""
+
+
+async def suggest_hints(problem) -> tuple[list[str], str | None]:
+    """Draft hints for a problem (a schemas.ProblemIn). Returns (hints, error)."""
+    samples = "\n".join(
+        f"- input: {t.input!r}; check: {t.check_type}; expected: {t.expected!r}" for t in problem.test_cases if t.is_sample
+    )
+    hidden = sum(not t.is_sample for t in problem.test_cases)
+    content = (
+        f"Title: {problem.title}\nDifficulty: {problem.difficulty}\n\n"
+        f"<description>\n{problem.description}\n</description>\n\n"
+        f"<sample_tests>\n{samples}\n</sample_tests>\n\nThere are {hidden} hidden tests.\n\n"
+        f"<reference_prompt>\n{problem.reference_prompt or '(none provided)'}\n</reference_prompt>"
+    )
+    req = Request("hints", HINTS_SYSTEM, content, 2048, "low", schema=HintList)
+    try:
+        completion = await _complete(daily_chain(), req)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("suggest_hints failed")
+        return [], f"Unexpected error: {exc}"
+    if completion.error:
+        return [], completion.error
+    if not isinstance(completion.parsed, HintList):
+        return [], completion.blocked or "The model did not return hints."
+    return completion.parsed.hints, None

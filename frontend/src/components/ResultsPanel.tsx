@@ -2,21 +2,11 @@ import { useState } from "react";
 import { CHECK_LABELS, type RunResult, type TestResult } from "../types";
 import { StatusText } from "./Badges";
 
-function ModelLine({ r }: { r: TestResult }) {
-  if (!r.model && !r.cached) return null;
-  return (
-    <p className="model-line muted small">
-      {r.model && <>Answered by <strong>{r.model}</strong>{r.backup ? " (backup model)" : ""}</>}
-      {r.cached && <span className="cached-pill" title="Same prompt and input as an earlier run, so the stored answer was reused - no quota spent.">⚡ cached</span>}
-    </p>
-  );
-}
-
 function CaseDetail({ r }: { r: TestResult }) {
   if (r.skipped) {
     return (
       <div className="case-detail">
-        <p className="muted">Not run - an earlier test failed, so grading stopped there (like LeetCode). Fix that test first.</p>
+        <p className="muted">Not run. An earlier test failed, so checking stopped there. Fix that test first.</p>
       </div>
     );
   }
@@ -24,9 +14,11 @@ function CaseDetail({ r }: { r: TestResult }) {
   if (!r.is_sample && r.input === null) {
     return (
       <div className="case-detail">
-        <p className="muted">Hidden test - input and output are not shown.</p>
+        <p className="muted">
+          {r.passed ? "Hidden test passed." : "Hidden test failed."} Its input and output aren't shown - re-read the
+          description for a case your prompt doesn't handle yet.
+        </p>
         {r.detail && <p className="detail error-text">{r.detail}</p>}
-        <ModelLine r={r} />
       </div>
     );
   }
@@ -35,7 +27,7 @@ function CaseDetail({ r }: { r: TestResult }) {
       <label>Input</label>
       <pre>{r.input || <span className="muted">(empty)</span>}</pre>
       <label>Model output</label>
-      <pre>{r.output || <span className="muted">(empty)</span>}</pre>
+      <pre className={r.passed ? "" : "pre-fail"}>{r.output || <span className="muted">(empty)</span>}</pre>
       <label>{CHECK_LABELS[r.check_type]} - expected</label>
       <pre>{r.expected}</pre>
       {r.detail && (
@@ -44,7 +36,6 @@ function CaseDetail({ r }: { r: TestResult }) {
           <p className={`detail ${r.passed ? "" : "error-text"}`}>{r.detail}</p>
         </>
       )}
-      <ModelLine r={r} />
     </div>
   );
 }
@@ -53,8 +44,7 @@ export default function ResultsPanel({ result, kind }: { result: RunResult; kind
   const firstFailing = result.results.findIndex((r) => !r.passed && !r.skipped);
   const [selected, setSelected] = useState(firstFailing === -1 ? 0 : firstFailing);
   const current = result.results[selected];
-  const backups = result.backup_models ?? [];
-  const skipped = result.skipped ?? 0;
+  const skipped = result.results.filter((r) => r.skipped).length;
 
   return (
     <div className="results">
@@ -62,19 +52,18 @@ export default function ResultsPanel({ result, kind }: { result: RunResult; kind
         <StatusText status={result.status} />
         <span className="muted">
           {result.passed} / {result.total} {kind === "run" ? "sample " : ""}tests passed
-          {skipped > 0 && ` · ${skipped} not run`} · {result.input_tokens + result.output_tokens} tokens
+          {skipped > 0 && ` · ${skipped} not run`} · {(result.input_tokens + result.output_tokens).toLocaleString()} tokens
         </span>
       </div>
-      {backups.length > 0 && (
-        <div className="alert warn small-alert">
-          Some tests were graded by a backup model (<strong>{backups.join(", ")}</strong>) because the main model was at its
-          free-tier limit. Results can differ slightly between models.
-        </div>
+      {kind === "run" && result.status === "accepted" && (
+        <p className="results-tip">Samples pass. <strong>Submit</strong> to check the hidden tests too.</p>
       )}
-      <div className="case-tabs">
+      <div className="case-tabs" role="tablist" aria-label="Test cases">
         {result.results.map((r, i) => (
           <button
             key={r.test_id}
+            role="tab"
+            aria-selected={i === selected}
             className={`case-tab ${r.skipped ? "skipped" : r.passed ? "pass" : "fail"} ${i === selected ? "active" : ""}`}
             onClick={() => setSelected(i)}
             title={r.skipped ? "Not run" : r.is_sample ? "Sample test" : "Hidden test"}

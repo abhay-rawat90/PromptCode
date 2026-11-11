@@ -120,6 +120,7 @@ class MeOut(BaseModel):
     # The user's own Gemini key: whether one is saved, and its last 4 characters.
     has_own_key: bool = False
     own_key_hint: str | None = None
+    reminder_emails: bool = True
     # One-off message for the UI (e.g. "we removed an unverified password").
     notice: str | None = None
 
@@ -141,6 +142,7 @@ class MeOut(BaseModel):
             best_streak=user.best_streak,
             has_own_key=user.gemini_key_enc is not None,
             own_key_hint=user.gemini_key_hint,
+            reminder_emails=user.reminder_emails,
             notice=notice,
         )
 
@@ -165,6 +167,7 @@ class ProfileOut(BaseModel):
     current_streak: int
     best_streak: int
     dailies_solved: int
+    badges: list[BadgeOut] = []  # every badge; earned_at is None for ones not earned yet
 
 
 # ---------- problems ----------
@@ -199,6 +202,40 @@ class TestCaseOut(TestCaseIn):
     position: int
 
 
+MAX_HINTS = 3
+MAX_HINT_CHARS = 500
+
+
+def hint_leaks(hint: str, description: str, reference_prompt: str, tests) -> bool:
+    """True if a hint gives away the reference solution or a hidden test (its input or answer).
+    Values already visible in the description or the sample tests don't count."""
+    text = hint.casefold()
+    reference = reference_prompt.strip().casefold()
+    if len(reference) >= 20 and reference in text:
+        return True
+    public = "\n".join([description, *(f"{t.input}\n{t.expected}" for t in tests if t.is_sample)]).casefold()
+    for t in tests:
+        if t.is_sample:
+            continue
+        for value in (t.input, t.expected):
+            value = value.strip().casefold()
+            if len(value) < 6 or value in public:
+                continue
+            if regex.search(rf"(?<!\w){regex.escape(value)}(?!\w)", text):
+                return True
+    return False
+
+
+def safe_hints(hints: list[str], description: str, reference_prompt: str, tests) -> list[str]:
+    """Clean up machine-written hints: trimmed, at most 3, none that leak."""
+    cleaned = []
+    for hint in hints:
+        hint = hint.strip()[:MAX_HINT_CHARS]
+        if hint and hint not in cleaned and not hint_leaks(hint, description, reference_prompt, tests):
+            cleaned.append(hint)
+    return cleaned[:MAX_HINTS]
+
+
 class ProblemIn(BaseModel):
     title: str = Field(min_length=3, max_length=120)
     description: str = Field(min_length=1, max_length=20_000)
@@ -207,7 +244,18 @@ class ProblemIn(BaseModel):
     starter_prompt: str = Field(default="", max_length=settings.max_prompt_chars)
     # The author's private solution; publishing requires it to pass every test.
     reference_prompt: str = Field(default="", max_length=settings.max_prompt_chars)
+    # Up to 3 hints, gentlest first. They must not give away the solution or hidden tests.
+    hints: list[str] = Field(default_factory=list, max_length=MAX_HINTS)
     test_cases: list[TestCaseIn] = Field(min_length=1, max_length=settings.max_tests_per_problem)
+
+    @field_validator("hints")
+    @classmethod
+    def clean_hints(cls, hints: list[str]) -> list[str]:
+        cleaned = [h.strip() for h in hints if h.strip()]
+        for i, hint in enumerate(cleaned, start=1):
+            if len(hint) > MAX_HINT_CHARS:
+                raise ValueError(f"Hint {i} is too long (keep hints under {MAX_HINT_CHARS} characters).")
+        return cleaned
 
     @field_validator("tags")
     @classmethod
@@ -223,6 +271,9 @@ class ProblemIn(BaseModel):
     def needs_sample(self) -> "ProblemIn":
         if not any(t.is_sample for t in self.test_cases):
             raise ValueError("At least one test case must be a visible sample.")
+        for i, hint in enumerate(self.hints, start=1):
+            if hint_leaks(hint, self.description, self.reference_prompt, self.test_cases):
+                raise ValueError(f"Hint {i} gives away the reference solution or a hidden test. Reword it as a nudge.")
         return self
 
 
@@ -237,6 +288,26 @@ class ProblemSummary(BaseModel):
     attempted: bool
     submissions: int
     acceptance: float | None
+    like_pct: int | None = None  # share of ratings that are likes (None until someone rates)
+    ratings: int = 0
+    has_hints: bool = False
+    is_daily: bool = False
+
+
+class MyRating(BaseModel):
+    liked: bool | None = None
+    difficulty: Literal["easier", "right", "harder"] | None = None
+
+
+class RatingOut(BaseModel):
+    likes: int
+    dislikes: int
+    my_rating: MyRating | None = None
+
+
+class HintsOut(BaseModel):
+    hint_count: int
+    hints: list[str]  # the ones this user has revealed so far
 
 
 class ProblemDetail(BaseModel):
@@ -255,6 +326,14 @@ class ProblemDetail(BaseModel):
     daily_day: date | None = None
     verified: bool = False  # its reference solution passed every test
     hidden_reason: str | None = None  # set only for admins viewing a problem they took down
+    hint_count: int = 0
+    hints: list[str] = []  # hints this user has revealed
+    likes: int = 0
+    dislikes: int = 0
+    my_rating: MyRating | None = None
+    # Neighbours in the problem list, for previous / next navigation.
+    prev_slug: str | None = None
+    next_slug: str | None = None
 
 
 class ProblemFull(ProblemIn):
@@ -286,6 +365,14 @@ class TestResultOut(BaseModel):
     cached: bool = False
 
 
+class BadgeOut(BaseModel):
+    key: str
+    name: str
+    icon: str
+    description: str
+    earned_at: datetime | None = None
+
+
 class RunOut(BaseModel):
     status: Literal["accepted", "wrong_answer", "error"]
     passed: int
@@ -300,6 +387,7 @@ class RunOut(BaseModel):
     cached: int = 0  # results served from the cache
     skipped: int = 0  # tests not run because an earlier one failed
     own_key: bool = False  # ran on the user's own Gemini API key
+    new_badges: list[BadgeOut] = []  # achievements this submission unlocked
     # Set when this submission solved today's daily problem for the first time.
     streak_extended: bool = False
     current_streak: int | None = None
@@ -327,11 +415,54 @@ class SubmissionOut(BaseModel):
     input_tokens: int
     output_tokens: int
     created_at: datetime
+    shared: bool = False
 
 
 class SubmissionDetail(SubmissionOut):
     prompt: str
     results: list[TestResultOut]
+
+
+class ShareIn(BaseModel):
+    shared: bool
+
+
+class SolutionOut(BaseModel):
+    id: int
+    username: str
+    avatar_url: str | None
+    prompt: str
+    tokens: int
+    votes: int
+    voted: bool
+    mine: bool
+    created_at: datetime
+
+
+class SolutionsOut(BaseModel):
+    official: str | None
+    community: list[SolutionOut]
+    # The viewer's own accepted submission with the fewest tokens (what "Share" would publish),
+    # and the one they're sharing now.
+    my_best_id: int | None = None
+    my_shared_id: int | None = None
+
+
+class VoteOut(BaseModel):
+    votes: int
+    voted: bool
+
+
+class RatingIn(MyRating):
+    pass
+
+
+class PreferencesIn(BaseModel):
+    reminder_emails: bool
+
+
+class HintSuggestions(BaseModel):
+    hints: list[str]
 
 
 class DailyProblemOut(BaseModel):

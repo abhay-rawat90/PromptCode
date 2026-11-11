@@ -22,6 +22,7 @@ def _summary(s: Submission) -> dict:
         "input_tokens": s.input_tokens,
         "output_tokens": s.output_tokens,
         "created_at": s.created_at,
+        "shared": s.shared,
     }
 
 

@@ -46,6 +46,8 @@ services:
         sync: false
       - key: SENTRY_DSN           # optional
         sync: false
+      - key: REMINDER_DAILY_CAP   # optional; streak reminder emails per day (default 90)
+        sync: false
       - key: DAILY_TOKEN_CAP      # optional site-wide daily Gemini token cap, e.g. 2000000
         sync: false
 
@@ -59,3 +61,14 @@ databases:
     plan: free            # note: Render's free Postgres expires after 30 days - upgrade to keep data
     databaseName: promptcode
     user: promptcode
+
+# Streak reminder emails on the free plan: the web service sleeps when idle, so add a Cron Job
+# (a paid Render feature) that runs `python -m app.reminders` at 18:00 UTC with the same
+# environment variables as the web service. Uncomment and fill in to use it:
+#
+#   - type: cron
+#     name: promptcode-reminders
+#     runtime: docker
+#     schedule: "0 18 * * *"
+#     dockerCommand: python -m app.reminders
+#     envVars: [ ...same as the web service... ]
