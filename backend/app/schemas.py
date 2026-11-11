@@ -102,6 +102,7 @@ class AuthConfig(BaseModel):
     google_client_id: str | None
     daily_test_budget: int
     allow_user_keys: bool = True
+    allow_user_problems: bool = False
 
 
 class MeOut(BaseModel):
@@ -204,6 +205,8 @@ class ProblemIn(BaseModel):
     difficulty: Difficulty
     tags: list[str] = Field(default_factory=list, max_length=8)
     starter_prompt: str = Field(default="", max_length=settings.max_prompt_chars)
+    # The author's private solution; publishing requires it to pass every test.
+    reference_prompt: str = Field(default="", max_length=settings.max_prompt_chars)
     test_cases: list[TestCaseIn] = Field(min_length=1, max_length=settings.max_tests_per_problem)
 
     @field_validator("tags")
@@ -250,6 +253,8 @@ class ProblemDetail(BaseModel):
     can_edit: bool
     solved: bool
     daily_day: date | None = None
+    verified: bool = False  # its reference solution passed every test
+    hidden_reason: str | None = None  # set only for admins viewing a problem they took down
 
 
 class ProblemFull(ProblemIn):
@@ -298,6 +303,18 @@ class RunOut(BaseModel):
     # Set when this submission solved today's daily problem for the first time.
     streak_extended: bool = False
     current_streak: int | None = None
+
+
+class VerifyOut(RunOut):
+    """Reference-prompt run over every test (all details shown to the author)."""
+
+    ok: bool
+    problems: list[str] = []
+
+
+class ReportIn(BaseModel):
+    reason: Literal["wrong_tests", "unclear", "other"]
+    note: str = Field(default="", max_length=500)
 
 
 class SubmissionOut(BaseModel):

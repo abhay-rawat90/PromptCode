@@ -92,17 +92,21 @@ QUEUED = {
     "description": "Hand written.",
     "difficulty": "medium",
     "tags": ["curated"],
-    "test_cases": [{"input": "x", "check_type": "exact", "expected": "y", "is_sample": True}],
+    "reference_prompt": "SHOUT {{input}}",
+    "test_cases": [{"input": "x", "check_type": "exact", "expected": "X", "case_sensitive": True, "is_sample": True}],
 }
 
 
 # ---------- publishing ----------
 
-def test_queue_is_used_before_ai(make_client, clock, monkeypatch):
+def test_queue_is_used_before_ai(make_client, clock, fake_model, monkeypatch):
     briefs = queue_generations(monkeypatch, generated())
     admin = make_client("queue_admin")
     make_admin("queue_admin")
     assert make_client("not_admin").post("/api/admin/daily/queue", json=QUEUED).status_code == 403
+    # Queued problems must pass verification like any other.
+    assert admin.post("/api/admin/daily/queue", json={**QUEUED, "reference_prompt": ""}).status_code == 422
+    assert admin.post("/api/admin/daily/queue", json={**QUEUED, "reference_prompt": "{{input}}"}).status_code == 422
     assert admin.post("/api/admin/daily/queue", json=QUEUED).status_code == 201
 
     challenge = asyncio.run(daily.ensure_daily(DAY1))
@@ -121,6 +125,7 @@ def test_ai_problem_is_verified_and_published(client, clock, fake_model, monkeyp
     detail = client.get(f"/api/problems/{challenge.problem.slug}").json()
     assert detail["daily_day"] == DAY1.isoformat()
     assert len(detail["sample_tests"]) == 2 and detail["hidden_count"] == 3
+    assert detail["verified"] is True
     # Idempotent: a second call returns the same challenge without generating again.
     assert asyncio.run(daily.ensure_daily(DAY1)).id == challenge.id
 

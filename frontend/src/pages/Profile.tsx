@@ -1,4 +1,5 @@
 import { Link, useParams } from "react-router-dom";
+import { useAuth } from "../auth";
 import { DifficultyBadge } from "../components/Badges";
 import { StreakChip } from "../components/Daily";
 import { Avatar, EmptyState, ErrorState, Skeleton } from "../components/ui";
@@ -9,6 +10,7 @@ const DIFFICULTIES: Difficulty[] = ["easy", "medium", "hard"];
 
 export default function Profile() {
   const { username = "" } = useParams();
+  const { config } = useAuth();
   const { data: fetched, error, loading, reload } = useApi<ProfileData>(`/users/${encodeURIComponent(username)}`);
   // Don't flash the previous user's profile while navigating between profiles.
   const profile = fetched && fetched.username.toLowerCase() === username.toLowerCase() ? fetched : null;
@@ -40,7 +42,9 @@ export default function Profile() {
         <div className="stat"><span className="stat-value">{profile.solved}</span><span className="stat-label">Solved</span></div>
         <div className="stat"><span className="stat-value">{profile.submissions}</span><span className="stat-label">Submissions</span></div>
         <div className="stat"><span className="stat-value">{profile.acceptance_rate === null ? "–" : `${profile.acceptance_rate}%`}</span><span className="stat-label">Acceptance</span></div>
-        <div className="stat"><span className="stat-value">{profile.problems_authored}</span><span className="stat-label">Problems created</span></div>
+        {(profile.problems_authored > 0 || config?.allow_user_problems) && (
+          <div className="stat"><span className="stat-value">{profile.problems_authored}</span><span className="stat-label">Problems created</span></div>
+        )}
       </div>
 
       <div className="card">

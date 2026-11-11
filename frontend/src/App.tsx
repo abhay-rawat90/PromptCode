@@ -84,7 +84,7 @@ function UserMenu() {
 }
 
 function Nav() {
-  const { user, loading } = useAuth();
+  const { user, loading, config } = useAuth();
   const [theme, toggleTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -103,7 +103,7 @@ function Nav() {
         <NavLink to="/" end>Problems</NavLink>
         <NavLink to="/daily">Daily</NavLink>
         <NavLink to="/leaderboard">Leaderboard</NavLink>
-        {user && <NavLink to="/problems/new">Create</NavLink>}
+        {user && (user.is_admin || config?.allow_user_problems) && <NavLink to="/problems/new">Create</NavLink>}
         {!user && !loading && <NavLink to="/login" className="mobile-only">Log in</NavLink>}
       </nav>
       <div className="nav-right">

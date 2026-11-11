@@ -2,7 +2,8 @@
 
 A LeetCode-style platform for practicing **prompt writing**. Each problem describes a task; you
 write a prompt, it is run against test cases on Google Gemini, and you need every test to pass.
-Anyone with an account can also publish their own problems.
+New problems come from admins and from the daily AI challenge. Every problem is verified before
+it's published, and users can report a broken one.
 
 ## Stack
 
@@ -60,7 +61,7 @@ A new problem goes live every day at **midnight UTC**:
   with the "Queue as an upcoming daily problem" checkbox on the Create page.
 - If the queue is empty, **Gemini writes a problem** (`DAILY_MODEL`). It's only published after
   passing three checks:
-  1. the same validation as a user-created problem;
+  1. the same validation as any other problem;
   2. its reference prompt passes **every** test;
   3. a do-nothing prompt (`{{input}}`) **fails** at least one test.
 
@@ -162,7 +163,26 @@ account menu then shows **Admin**, with:
 - every AI model's quota status (requests today, daily limit, cache hits, errors) and warnings;
 - tokens used per day, broken down by run, submit and daily generation;
 - today's biggest users, and the daily cap;
+- **Reports**: problems users flagged, where you can dismiss the reports, hide the problem, or
+  restore a hidden one (hidden problems keep their submissions);
 - the daily-problem queue.
+
+## Creating problems
+
+Only admins can create problems (**Create** in the top bar). To let every user create them, set
+`ALLOW_USER_PROBLEMS=true`. While it's off, problems made earlier by non-admins are hidden
+everywhere but kept in the database, and turning it on brings them back.
+
+Every problem must be **verified** before it's published or queued as a daily:
+1. Write a private **reference solution prompt** in the form.
+2. Click **Verify**. It runs on the main model (never a backup) and shows every test's result,
+   hidden tests included.
+3. It passes when the reference prompt passes every test **and** a prompt that just repeats the
+   input (`{{input}}`) fails at least one. Publishing is enabled only while the form still
+   matches what was verified.
+
+Publishing then re-checks on the server. It's instant, because Verify already cached every answer.
+Verified problems show a "✓ Verified" badge.
 
 ## Continuous integration
 

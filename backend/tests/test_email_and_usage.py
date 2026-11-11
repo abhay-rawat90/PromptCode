@@ -27,13 +27,18 @@ def test_signup_sends_verification_and_gates_publishing(make_client):
     assert message.to == "unverified_user@example.com" and "Confirm" in message.subject
     assert "http://localhost:5173/verify-email?token=" in message.text and "verify-email?token=" in message.html
 
-    r = c.post("/api/problems", json=PROBLEM)
-    assert r.status_code == 403 and "verify your email" in r.json()["detail"]
+    object.__setattr__(settings, "allow_user_problems", True)  # the gate only matters when users can publish
+    try:
+        r = c.post("/api/problems", json=PROBLEM)
+        assert r.status_code == 403 and "verify your email" in r.json()["detail"]
 
-    token = email_token("unverified_user@example.com")
-    assert c.post("/api/auth/verify-email", json={"token": token}).status_code == 200
-    assert c.get("/api/auth/me").json()["email_verified"] is True
-    assert c.post("/api/problems", json=PROBLEM).status_code == 201
+        token = email_token("unverified_user@example.com")
+        assert c.post("/api/auth/verify-email", json={"token": token}).status_code == 200
+        assert c.get("/api/auth/me").json()["email_verified"] is True
+        r = c.post("/api/problems", json=PROBLEM)  # past the email gate; now it needs a reference solution
+        assert r.status_code == 422 and "reference" in r.json()["detail"]
+    finally:
+        object.__setattr__(settings, "allow_user_problems", False)
     # Links are single-use.
     assert c.post("/api/auth/verify-email", json={"token": token}).status_code == 400
 

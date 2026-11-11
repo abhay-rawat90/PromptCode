@@ -59,6 +59,9 @@ class Settings:
     email_from: str = os.getenv("EMAIL_FROM", "PromptCode <onboarding@resend.dev>")
     # Publishing problems requires a verified email (blocks throwaway spam accounts).
     require_verified_to_publish: bool = _bool("REQUIRE_VERIFIED_TO_PUBLISH", True)
+    # Let every user create problems. Off: only admins can, and problems made by non-admins
+    # are hidden (kept in the database, so turning this back on restores them).
+    allow_user_problems: bool = _bool("ALLOW_USER_PROBLEMS", False)
     rate_limit_storage: str = os.getenv("RATE_LIMIT_STORAGE", "memory://")
 
     # ---- LLM ----

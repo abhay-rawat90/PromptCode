@@ -66,7 +66,8 @@ def _fresh_rate_limits():
 def make_client():
     """Each client has its own cookie jar, i.e. its own browser."""
 
-    def factory(username: str | None = None, password: str = STRONG_PASSWORD, verified: bool = True) -> Client:
+    def factory(username: str | None = None, password: str = STRONG_PASSWORD, verified: bool = True,
+                admin: bool = False) -> Client:
         c = Client(app)
         if username:
             email = f"{username}@example.com".lower()
@@ -74,6 +75,15 @@ def make_client():
             assert r.status_code == 201, r.text
             if verified:  # click the link from the verification email, like a real user
                 assert c.post("/api/auth/verify-email", json={"token": email_token(email)}).status_code == 200
+            if admin:
+                from sqlalchemy import func, update
+
+                from app.db import SessionLocal
+                from app.models import User
+
+                with SessionLocal() as db:
+                    db.execute(update(User).where(func.lower(User.username) == username.lower()).values(is_admin=True))
+                    db.commit()
         return c
 
     return factory

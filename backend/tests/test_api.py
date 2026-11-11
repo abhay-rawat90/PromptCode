@@ -23,6 +23,7 @@ PROBLEM = {
     "description": "Make the model say positive.",
     "difficulty": "easy",
     "tags": ["Test", "demo"],
+    "reference_prompt": "ALWAYS_POSITIVE",
     "test_cases": [
         {"input": "a", "check_type": "exact", "expected": "positive", "is_sample": True},
         {"input": "b", "check_type": "exact", "expected": "positive"},
@@ -43,7 +44,7 @@ def test_problem_search_treats_wildcards_literally(client):
 
 
 def test_problem_lifecycle_and_submit(make_client, fake_llm):
-    author = make_client("author")
+    author = make_client("author", admin=True)
     solver = make_client("solver")
     anon = make_client()
 
@@ -106,7 +107,7 @@ def test_daily_budget_and_burst_limits(make_client, fake_llm, monkeypatch):
 
 
 def test_validation_rejects_bad_problems(make_client):
-    c = make_client("validator")
+    c = make_client("validator", admin=True)
     no_sample = {**PROBLEM, "test_cases": [{"input": "a", "check_type": "exact", "expected": "x"}]}
     r = c.post("/api/problems", json=no_sample)
     assert r.status_code == 422 and r.json()["detail"][0]["msg"].startswith("At least one")

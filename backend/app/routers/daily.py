@@ -10,6 +10,7 @@ from ..db import get_db
 from ..models import DailyChallenge, DailyQueueItem, DailySolve, Problem, Submission, User
 from ..schemas import DailyArchiveItem, DailyProblemOut, DailyTodayOut, ProblemIn, QueueItemOut
 from ..security import get_admin_user, get_optional_user
+from .problems import verify_for_publish
 
 router = APIRouter(prefix="/api", tags=["daily"])
 
@@ -46,6 +47,9 @@ async def daily_today(db: Session = Depends(get_db), user: User | None = Depends
         _kick_off_preparation()
         out.status = daily.generation_status(day)
         return out
+    if challenge.problem.hidden_at is not None:
+        out.status = "unavailable"  # an admin withdrew today's problem
+        return out
 
     out.status = "ready"
     out.problem = _problem_out(challenge.problem)
@@ -64,7 +68,8 @@ def daily_archive(
 ) -> list[DailyArchiveItem]:
     rows = db.scalars(
         select(DailyChallenge)
-        .where(DailyChallenge.day <= daily.today())
+        .join(DailyChallenge.problem)
+        .where(DailyChallenge.day <= daily.today(), Problem.hidden_at.is_(None))
         .options(selectinload(DailyChallenge.problem))
         .order_by(DailyChallenge.day.desc())
         .limit(limit)
@@ -109,7 +114,8 @@ def list_queue(db: Session = Depends(get_db), _: User = Depends(get_admin_user))
 
 
 @router.post("/admin/daily/queue", response_model=QueueItemOut, status_code=status.HTTP_201_CREATED)
-def add_to_queue(body: ProblemIn, db: Session = Depends(get_db), admin: User = Depends(get_admin_user)) -> QueueItemOut:
+async def add_to_queue(body: ProblemIn, db: Session = Depends(get_db), admin: User = Depends(get_admin_user)) -> QueueItemOut:
+    await verify_for_publish(body, admin)  # queued problems must be solvable too
     item = DailyQueueItem(payload=body.model_dump(), created_by=admin.id)
     db.add(item)
     db.commit()

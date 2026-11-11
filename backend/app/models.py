@@ -68,6 +68,12 @@ class Problem(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     # Hidden from everyone until this moment (daily problems are prepared a day ahead).
     available_from: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    # The author's private solution. Publishing requires it to pass every test (see verification).
+    reference_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Taken down by an admin (e.g. after reports). Hidden from everyone but admins.
+    hidden_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    hidden_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     author: Mapped[User | None] = relationship()
     daily: Mapped["DailyChallenge | None"] = relationship(back_populates="problem", uselist=False)
@@ -191,6 +197,25 @@ class UsageDaily(Base):
     requests: Mapped[int] = mapped_column(Integer, default=0)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ProblemReport(Base):
+    """A user flagging a problem as broken or inappropriate (one per user per problem)."""
+
+    __tablename__ = "problem_reports"
+    __table_args__ = (UniqueConstraint("problem_id", "user_id", name="uq_problem_reports_problem_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    reason: Mapped[str] = mapped_column(String(20))  # wrong_tests | unclear | other
+    note: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(10), default="open", index=True)  # open | dismissed | resolved
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    problem: Mapped[Problem] = relationship()
+    user: Mapped[User] = relationship()
 
 
 class ModelUsageDaily(Base):

@@ -238,6 +238,7 @@ PROBLEM = {
     "description": "Say ok.",
     "difficulty": "easy",
     "tags": [],
+    "reference_prompt": "GOOD",
     "test_cases": [
         {"input": "1", "check_type": "exact", "expected": "ok", "is_sample": True},
         *({"input": str(i), "check_type": "exact", "expected": "ok"} for i in range(2, 8)),
@@ -259,11 +260,13 @@ def fake_runs(monkeypatch):
 
 
 def test_submit_stops_at_first_failure_and_charges_only_real_calls(make_client, fake_runs):
-    author = make_client("stopper")
+    author = make_client("stopper", admin=True)
     slug = author.post("/api/problems", json=PROBLEM).json()["slug"]
     before = author.post(f"/api/problems/{slug}/run", json={"prompt": "GOOD"}).json()["daily_remaining"]
     fake_runs.clear()
 
+    before = author.post(f"/api/problems/{slug}/run", json={"prompt": "GOOD"}).json()["daily_remaining"]
+    fake_runs.clear()
     out = author.post(f"/api/problems/{slug}/submit", json={"prompt": "bad"}).json()
     assert out["status"] == "wrong_answer" and out["total"] == 7
     assert out["skipped"] == 7 - len(fake_runs) and len(fake_runs) <= settings.max_concurrency
@@ -276,7 +279,7 @@ def test_submit_stops_at_first_failure_and_charges_only_real_calls(make_client, 
 
 
 def test_run_and_submit_can_stream_progress(make_client, fake_runs):
-    user = make_client("streamer")
+    user = make_client("streamer", admin=True)
     slug = user.post("/api/problems", json={**PROBLEM, "title": "Stream Demo"}).json()["slug"]
     r = user.post(f"/api/problems/{slug}/run", json={"prompt": "GOOD"},
                   headers={"Accept": "application/x-ndjson"})

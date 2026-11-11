@@ -1,10 +1,20 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError } from "../api";
+import { api, apiStream, ApiError } from "../api";
 import { useAuth } from "../auth";
-import { Skeleton, Spinner } from "../components/ui";
+import ResultsPanel from "../components/ResultsPanel";
+import { EmptyState, Skeleton, Spinner } from "../components/ui";
 import { useToast } from "../toast";
-import { CHECK_LABELS, EXPECTED_HINTS, type CheckType, type ProblemDetail, type ProblemInput, type TestCaseInput } from "../types";
+import {
+  CHECK_LABELS,
+  EXPECTED_HINTS,
+  type CheckType,
+  type ProblemDetail,
+  type ProblemInput,
+  type RunProgress,
+  type TestCaseInput,
+  type VerifyResult,
+} from "../types";
 
 const MAX_TESTS = 20;
 
@@ -22,6 +32,7 @@ const blankProblem: ProblemInput = {
   difficulty: "easy",
   tags: [],
   starter_prompt: "",
+  reference_prompt: "",
   test_cases: [blankTest(true)],
 };
 
@@ -34,8 +45,12 @@ export default function ProblemForm() {
   const editing = Boolean(slug);
   const navigate = useNavigate();
   const toast = useToast();
-  const { user } = useAuth();
+  const { user, config } = useAuth();
   const [toQueue, setToQueue] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyProgress, setVerifyProgress] = useState<{ done: number; total: number } | null>(null);
+  // The last verification and the exact form contents it checked: editing anything needs a re-verify.
+  const [verified, setVerified] = useState<{ result: VerifyResult; snapshot: string } | null>(null);
 
   const [form, setForm] = useState<ProblemInput>(blankProblem);
   const [tagsText, setTagsText] = useState("");
@@ -78,7 +93,40 @@ export default function ProblemForm() {
       }
     });
     if (!form.test_cases.some((t) => t.is_sample)) e.test_cases = "Mark at least one test as a visible sample.";
+    if (!form.reference_prompt.trim()) e.reference_prompt = "Write a solution prompt that passes every test.";
     return e;
+  }
+
+  const body = () => ({ ...form, tags: tagsText.split(",").map((t) => t.trim()).filter(Boolean) });
+  const snapshot = JSON.stringify(body());
+  const isVerified = Boolean(verified?.result.ok && verified.snapshot === snapshot);
+  const isStale = Boolean(verified && verified.snapshot !== snapshot);
+
+  async function onVerify() {
+    setFormError(null);
+    const clientErrors = validate();
+    setErrors(clientErrors);
+    if (Object.keys(clientErrors).length) {
+      document.querySelector(".field-error")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    const checked = snapshot;
+    setVerifying(true);
+    setVerifyProgress({ done: 0, total: form.test_cases.length });
+    try {
+      const result = await apiStream<VerifyResult, RunProgress>("/problems/verify", body(), (ev) => {
+        if (ev.type === "progress") setVerifyProgress({ done: ev.done, total: ev.total });
+      });
+      setVerified({ result, snapshot: checked });
+      setTimeout(() => document.querySelector(".verify-results")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
+    } catch (err) {
+      const apiErr = err as ApiError;
+      if (Object.keys(apiErr.fields).length) setErrors(apiErr.fields);
+      setFormError(apiErr.message);
+    } finally {
+      setVerifying(false);
+      setVerifyProgress(null);
+    }
   }
 
   async function onSubmit(e: FormEvent) {
@@ -90,18 +138,21 @@ export default function ProblemForm() {
       document.querySelector(".field-error")?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
+    if (!isVerified) {
+      setFormError("Verify the problem first: your reference prompt must pass every test.");
+      return;
+    }
     setSaving(true);
-    const body = { ...form, tags: tagsText.split(",").map((t) => t.trim()).filter(Boolean) };
     try {
       if (toQueue) {
-        await api("/admin/daily/queue", { method: "POST", body });
+        await api("/admin/daily/queue", { method: "POST", body: body() });
         toast("Added to the daily queue. It will be published as an upcoming daily problem.", "success");
         navigate("/daily");
         return;
       }
       const saved = await api<ProblemDetail>(editing ? `/problems/${slug}` : "/problems", {
         method: editing ? "PUT" : "POST",
-        body,
+        body: body(),
       });
       toast(editing ? "Problem updated." : "Problem published!", "success");
       navigate(`/problems/${saved.slug}`);
@@ -118,6 +169,13 @@ export default function ProblemForm() {
     }
   }
 
+  if (user && !user.is_admin && !config?.allow_user_problems) {
+    return (
+      <div className="page">
+        <EmptyState title="Creating problems is turned off">New problems are added by the PromptCode team. <Link to="/">Back to problems</Link></EmptyState>
+      </div>
+    );
+  }
   if (loadError) return <div className="page"><div className="alert error">{loadError}</div></div>;
   if (!loaded) return <div className="page"><Skeleton rows={10} /></div>;
 
@@ -167,6 +225,15 @@ export default function ProblemForm() {
           <div className="field">
             <label htmlFor="starter">Starter prompt <span className="muted">(optional)</span></label>
             <textarea id="starter" rows={3} value={form.starter_prompt} onChange={(e) => set("starter_prompt", e.target.value)} className="mono" />
+          </div>
+          <div className="field">
+            <label htmlFor="reference">Reference solution prompt <span className="muted">(private)</span></label>
+            <textarea id="reference" rows={4} value={form.reference_prompt} onChange={(e) => set("reference_prompt", e.target.value)}
+              className="mono" aria-invalid={Boolean(errors.reference_prompt)} maxLength={8000}
+              placeholder="A prompt that solves the problem. Use {{input}} or leave it out, like a solver would." />
+            {errors.reference_prompt ? <FieldError msg={errors.reference_prompt} /> : (
+              <p className="field-hint">Never shown to solvers. Before publishing it must pass every test, and a prompt that just repeats the input must fail.</p>
+            )}
           </div>
         </div>
 
@@ -231,10 +298,36 @@ export default function ProblemForm() {
             <span>Queue as an upcoming <strong>daily problem</strong> instead of publishing now (admin)</span>
           </label>
         )}
+        {verifying && verifyProgress && (
+          <div className="running-panel" role="status" aria-live="polite">
+            <div className="running"><Spinner /> Verifying… test {Math.min(verifyProgress.done + 1, verifyProgress.total)} of {verifyProgress.total} <span className="muted small">(your reference prompt, then a do-nothing prompt)</span></div>
+            <div className="progress"><div className="progress-fill diff-bg-easy" style={{ width: `${(100 * verifyProgress.done) / Math.max(1, verifyProgress.total)}%` }} /></div>
+          </div>
+        )}
+        {verified && !verifying && (
+          <div className="verify-results card">
+            {isStale ? (
+              <div className="alert info">You changed the problem since this check. Verify again before publishing.</div>
+            ) : verified.result.ok ? (
+              <div className="alert ok">✓ Verified: the reference prompt passes all {verified.result.total} tests, and a do-nothing prompt fails. Ready to publish.</div>
+            ) : (
+              <div className="alert error">
+                Not publishable yet:
+                <ul>{verified.result.problems.map((p) => <li key={p}>{p}</li>)}</ul>
+              </div>
+            )}
+            <ResultsPanel key={verified.snapshot} result={verified.result} kind="submit" />
+          </div>
+        )}
         {formError && <div className="alert error" role="alert">{formError}</div>}
         <div className="form-actions sticky-actions">
           <button type="button" className="btn ghost" onClick={() => navigate(-1)}>Cancel</button>
-          <button className="btn primary" disabled={saving}>{saving ? <Spinner small /> : editing ? "Save changes" : toQueue ? "Add to daily queue" : "Publish problem"}</button>
+          <button type="button" className={`btn ${isVerified ? "ghost" : "secondary"}`} onClick={onVerify} disabled={verifying || saving}>
+            {verifying ? <><Spinner small /> Verifying</> : isVerified ? "✓ Verified" : "Verify"}
+          </button>
+          <button className="btn primary" disabled={saving || verifying || !isVerified} title={isVerified ? undefined : "Verify the problem first"}>
+            {saving ? <Spinner small /> : editing ? "Save changes" : toQueue ? "Add to daily queue" : "Publish problem"}
+          </button>
         </div>
       </form>
     </div>

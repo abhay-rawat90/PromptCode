@@ -8,7 +8,7 @@ import ResultsPanel from "../components/ResultsPanel";
 import { formatDay } from "../components/Daily";
 import { Celebration, ConfirmDialog, EmptyState, ErrorState, Skeleton, Spinner } from "../components/ui";
 import { useToast } from "../toast";
-import { CHECK_LABELS, type ProblemDetail, type RunProgress, type RunResult, type Submission, type SubmissionDetail } from "../types";
+import { CHECK_LABELS, type ProblemDetail, type ReportReason, type RunProgress, type RunResult, type Submission, type SubmissionDetail } from "../types";
 
 const MAX_PROMPT = 8000;
 const draftKey = (slug: string) => `promptcode.draft.${slug}`;
@@ -47,6 +47,54 @@ function DailyBanner({ day }: { day: string }) {
   );
 }
 type Kind = "run" | "submit";
+
+const REPORT_REASONS: { value: ReportReason; label: string }[] = [
+  { value: "wrong_tests", label: "A test is wrong or impossible to pass" },
+  { value: "unclear", label: "The description is unclear" },
+  { value: "other", label: "Something else" },
+];
+
+/** Lets a user flag a broken problem for the admins. */
+function ReportDialog({ slug, open, onClose }: { slug: string; open: boolean; onClose: () => void }) {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [reason, setReason] = useState<ReportReason>("wrong_tests");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function send() {
+    setBusy(true);
+    try {
+      const res = await api<{ detail: string }>(`/problems/${slug}/report`, { method: "POST", body: { reason, note } });
+      toast(res.detail, "success");
+      setNote("");
+      onClose();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const unverified = Boolean(user && !user.email_verified);
+  return (
+    <ConfirmDialog open={open} title="Report this problem" confirmLabel="Send report" busy={busy} onConfirm={send} onCancel={onClose}>
+      {unverified ? (
+        <p>Please verify your email first (see <Link to="/settings">Settings</Link>), then you can report problems.</p>
+      ) : (
+        <div className="report-form">
+          {REPORT_REASONS.map((r) => (
+            <label key={r.value} className="radio-row">
+              <input type="radio" name="reason" checked={reason === r.value} onChange={() => setReason(r.value)} /> {r.label}
+            </label>
+          ))}
+          <textarea rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder="What's wrong? e.g. 'Test 2 expects Paris but the input is about Rome.'" aria-label="Details" />
+        </div>
+      )}
+    </ConfirmDialog>
+  );
+}
 
 interface Progress {
   done: number;
@@ -105,6 +153,7 @@ export default function ProblemPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
+  const [reporting, setReporting] = useState(false);
   const [progress, setProgress] = useState<Progress>({ done: 0, total: 0, waiting: null });
   const saveTimer = useRef<number>();
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -251,8 +300,14 @@ export default function ProblemPage() {
 
         {tab === "description" ? (
           <div className="pane-body">
+            {problem.hidden_reason && (
+              <div className="alert error hidden-banner">
+                <strong>Hidden from users.</strong> {problem.hidden_reason} Restore it from the <Link to="/admin">admin page</Link>.
+              </div>
+            )}
             <h1 className="problem-title">
               {problem.title} {problem.solved && <span className="solved-pill">✓ Solved</span>}
+              {problem.verified && <span className="verified-pill" title="Its reference solution passes every test, so it's definitely solvable.">✓ Verified</span>}
             </h1>
             <div className="meta">
               <DifficultyBadge difficulty={problem.difficulty} />
@@ -286,6 +341,11 @@ export default function ProblemPage() {
             ))}
             {problem.hidden_count > 0 && (
               <p className="muted small">🔒 {problem.hidden_count} hidden test{problem.hidden_count > 1 ? "s" : ""} also run when you submit.</p>
+            )}
+            {user && (
+              <p className="report-line">
+                <button className="link-btn" onClick={() => setReporting(true)}>⚑ Report an issue with this problem</button>
+              </p>
             )}
           </div>
         ) : (
@@ -355,6 +415,7 @@ export default function ProblemPage() {
         </div>
       </section>
 
+      <ReportDialog slug={slug} open={reporting} onClose={() => setReporting(false)} />
       <ConfirmDialog
         open={confirmDelete}
         title={`Delete "${problem.title}"?`}

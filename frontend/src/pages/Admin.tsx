@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import { DifficultyBadge } from "../components/Badges";
 import { formatDay } from "../components/Daily";
@@ -44,6 +45,7 @@ interface UsageReport {
   warnings: string[];
   cache_hits_today: number;
   users_with_own_key: number;
+  open_reports: number;
 }
 
 const STATUS_LABEL: Record<ModelQuota["status"], string> = {
@@ -112,6 +114,88 @@ function UsageChart({ days }: { days: UsageDay[] }) {
   );
 }
 
+interface ReportedProblem {
+  problem_id: number;
+  slug: string;
+  title: string;
+  daily_day: string | null;
+  hidden: boolean;
+  hidden_reason: string | null;
+  open_reports: number;
+  reports: { username: string; reason: string; note: string; status: string; created_at: string }[];
+}
+
+const REASON_LABEL: Record<string, string> = { wrong_tests: "Wrong test", unclear: "Unclear", other: "Other" };
+
+function ReportsCard({ onChange }: { onChange: () => void }) {
+  const toast = useToast();
+  const reports = useApi<ReportedProblem[]>("/admin/reports");
+  const [hiding, setHiding] = useState<ReportedProblem | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function act(path: string, body: unknown, message: string) {
+    setBusy(true);
+    try {
+      await api(path, { method: "POST", body });
+      toast(message, "success");
+      reports.reload();
+      onChange();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+      setHiding(null);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Reports</h2>
+      <p className="muted small">Problems users flagged as broken, and problems you've hidden. Hidden problems keep their submissions and can be restored.</p>
+      {reports.error && <ErrorState message={reports.error} onRetry={reports.reload} busy={reports.loading} />}
+      {!reports.data && !reports.error && <Skeleton rows={2} />}
+      {reports.data?.length === 0 && <EmptyState title="Nothing to review">No open reports.</EmptyState>}
+      {reports.data?.map((g) => (
+        <div key={g.problem_id} className="report-group">
+          <div className="report-group-head">
+            <div>
+              <Link to={`/problems/${g.slug}`}><strong>{g.title}</strong></Link>{" "}
+              {g.daily_day && <span className="tag">daily {formatDay(g.daily_day)}</span>}{" "}
+              {g.hidden ? <span className="pill-warn">Hidden{g.hidden_reason ? `: ${g.hidden_reason}` : ""}</span> : <span className="muted small">{g.open_reports} open report{g.open_reports === 1 ? "" : "s"}</span>}
+            </div>
+            <div className="report-actions">
+              {g.hidden ? (
+                <button className="btn ghost small" disabled={busy} onClick={() => act(`/admin/problems/${g.problem_id}/unhide`, undefined, "Problem restored.")}>Restore</button>
+              ) : (
+                <>
+                  <button className="btn ghost small" disabled={busy} onClick={() => act(`/admin/problems/${g.problem_id}/dismiss-reports`, undefined, "Reports dismissed.")}>Dismiss</button>
+                  <button className="btn danger small" disabled={busy} onClick={() => { setReason(""); setHiding(g); }}>Hide problem</button>
+                </>
+              )}
+            </div>
+          </div>
+          {g.reports.some((r) => r.status === "open") && (
+            <ul className="report-items">
+              {g.reports.filter((r) => r.status === "open").map((r) => (
+                <li key={r.username + r.created_at}>
+                  <span className="tag">{REASON_LABEL[r.reason] ?? r.reason}</span> <strong>{r.username}</strong>
+                  {r.note && <>: {r.note}</>} <span className="muted small">· {new Date(r.created_at).toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+      <ConfirmDialog open={hiding !== null} title={`Hide "${hiding?.title}"?`} confirmLabel="Hide problem" danger busy={busy}
+        onConfirm={() => hiding && act(`/admin/problems/${hiding.problem_id}/hide`, { reason }, "Problem hidden.")} onCancel={() => setHiding(null)}>
+        <p>Users won't see it anywhere until you restore it. Its open reports are closed.</p>
+        <input value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional), e.g. Test 3 is wrong" aria-label="Reason" style={{ width: "100%" }} />
+      </ConfirmDialog>
+    </div>
+  );
+}
+
 export default function Admin() {
   const toast = useToast();
   const usage = useApi<UsageReport>("/admin/usage?days=14");
@@ -155,7 +239,10 @@ export default function Admin() {
             <div className="stat"><span className="stat-value">{fmt(report.problems)}</span><span className="stat-label">Problems</span></div>
             <div className="stat"><span className="stat-value">{fmt(report.cache_hits_today)}</span><span className="stat-label">Calls saved by cache today</span></div>
             <div className="stat"><span className="stat-value">{fmt(report.users_with_own_key)}</span><span className="stat-label">Users with own API key</span></div>
+            <div className="stat"><span className="stat-value">{fmt(report.open_reports)}</span><span className="stat-label">Open reports</span></div>
           </div>
+
+          <ReportsCard onChange={usage.reload} />
 
           <ModelQuotas models={report.models} />
 

@@ -1,17 +1,20 @@
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import update as sa_update
+from sqlalchemy.orm import Session, selectinload
 
 from .. import daily, llm
 from ..config import settings
 from ..db import get_db
-from ..models import ModelUsageDaily, Problem, Submission, UsageDaily, User
+from ..models import ModelUsageDaily, Problem, ProblemReport, Submission, UsageDaily, User, utcnow
 from ..security import get_admin_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+log = logging.getLogger("promptcode.admin")
 
 KINDS = ("run", "submit", "daily", "other")
 
@@ -61,6 +64,115 @@ class UsageReport(BaseModel):
     warnings: list[str] = []
     cache_hits_today: int = 0
     users_with_own_key: int = 0
+    open_reports: int = 0
+
+
+# ---------- reports & moderation ----------
+
+class ReportOut(BaseModel):
+    username: str
+    reason: str
+    note: str
+    status: str
+    created_at: datetime
+
+
+class ReportedProblem(BaseModel):
+    problem_id: int
+    slug: str
+    title: str
+    daily_day: date | None
+    hidden: bool
+    hidden_reason: str | None
+    open_reports: int
+    reports: list[ReportOut]
+
+
+class HideIn(BaseModel):
+    reason: str = Field(default="", max_length=300)
+
+
+@router.get("/reports", response_model=list[ReportedProblem])
+def list_reports(db: Session = Depends(get_db), _: User = Depends(get_admin_user)) -> list[ReportedProblem]:
+    """Problems with open reports, plus problems currently hidden. Newest report first."""
+    problem_ids = set(db.scalars(select(ProblemReport.problem_id).where(ProblemReport.status == "open")))
+    problem_ids |= set(db.scalars(select(Problem.id).where(Problem.hidden_at.is_not(None))))
+    if not problem_ids:
+        return []
+    problems = db.scalars(
+        select(Problem).where(Problem.id.in_(problem_ids)).options(selectinload(Problem.daily))
+    ).all()
+    reports = db.scalars(
+        select(ProblemReport)
+        .where(ProblemReport.problem_id.in_(problem_ids))
+        .options(selectinload(ProblemReport.user))
+        .order_by(ProblemReport.created_at.desc())
+    ).all()
+    by_problem: dict[int, list[ProblemReport]] = {}
+    for r in reports:
+        by_problem.setdefault(r.problem_id, []).append(r)
+
+    out = [
+        ReportedProblem(
+            problem_id=p.id,
+            slug=p.slug,
+            title=p.title,
+            daily_day=p.daily.day if p.daily else None,
+            hidden=p.hidden_at is not None,
+            hidden_reason=p.hidden_reason,
+            open_reports=sum(r.status == "open" for r in by_problem.get(p.id, [])),
+            reports=[
+                ReportOut(username=r.user.username, reason=r.reason, note=r.note, status=r.status, created_at=r.created_at)
+                for r in by_problem.get(p.id, [])
+            ],
+        )
+        for p in problems
+    ]
+    out.sort(key=lambda g: (g.open_reports == 0, -max((r.created_at.timestamp() for r in g.reports), default=0)))
+    return out
+
+
+def _admin_problem(db: Session, problem_id: int) -> Problem:
+    problem = db.get(Problem, problem_id)
+    if problem is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Problem not found")
+    return problem
+
+
+def _close_reports(db: Session, problem_id: int, new_status: str) -> None:
+    db.execute(
+        sa_update(ProblemReport)
+        .where(ProblemReport.problem_id == problem_id, ProblemReport.status == "open")
+        .values(status=new_status, resolved_at=utcnow())
+    )
+
+
+@router.post("/problems/{problem_id}/dismiss-reports", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_reports(problem_id: int, db: Session = Depends(get_db), _: User = Depends(get_admin_user)) -> None:
+    """The reports were wrong: close them and keep the problem up."""
+    _admin_problem(db, problem_id)
+    _close_reports(db, problem_id, "dismissed")
+    db.commit()
+
+
+@router.post("/problems/{problem_id}/hide", status_code=status.HTTP_204_NO_CONTENT)
+def hide_problem(problem_id: int, body: HideIn, db: Session = Depends(get_db), admin: User = Depends(get_admin_user)) -> None:
+    """Take a problem down (kept in the database with its submissions; can be restored)."""
+    problem = _admin_problem(db, problem_id)
+    problem.hidden_at = utcnow()
+    problem.hidden_reason = body.reason.strip() or None
+    _close_reports(db, problem_id, "resolved")
+    db.commit()
+    log.info("Admin %s hid problem %s (%r): %s", admin.username, problem.id, problem.title, problem.hidden_reason)
+
+
+@router.post("/problems/{problem_id}/unhide", status_code=status.HTTP_204_NO_CONTENT)
+def unhide_problem(problem_id: int, db: Session = Depends(get_db), admin: User = Depends(get_admin_user)) -> None:
+    problem = _admin_problem(db, problem_id)
+    problem.hidden_at = None
+    problem.hidden_reason = None
+    db.commit()
+    log.info("Admin %s restored problem %s (%r)", admin.username, problem.id, problem.title)
 
 
 def _model_quotas(db: Session, today) -> tuple[list[ModelQuota], list[str]]:
@@ -145,6 +257,7 @@ def usage_report(
         models=models,
         warnings=warnings,
         cache_hits_today=sum(m.cache_hits_today for m in models),
+        open_reports=db.scalar(select(func.count()).select_from(ProblemReport).where(ProblemReport.status == "open")) or 0,
         users_with_own_key=db.scalar(select(func.count()).select_from(User).where(User.gemini_key_enc.is_not(None))) or 0,
         daily_token_cap=settings.daily_token_cap,
         tokens_today=per_day[today].total,

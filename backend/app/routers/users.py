@@ -28,6 +28,7 @@ def profile(username: str, db: Session = Depends(get_db)) -> ProfileOut:
     solved_rows = db.execute(
         select(Problem.slug, Problem.title, Problem.difficulty)
         .join(first_solve, first_solve.c.problem_id == Problem.id)
+        .where(daily.visible_problem_clause())  # hidden problems don't count
         .order_by(first_solve.c.solved_at.desc())
     ).all()
 
@@ -55,7 +56,9 @@ def profile(username: str, db: Session = Depends(get_db)) -> ProfileOut:
         total_by_difficulty=total_by_difficulty,
         submissions=submissions,
         acceptance_rate=round(100 * accepted / submissions, 1) if submissions else None,
-        problems_authored=db.scalar(select(func.count()).where(Problem.author_id == user.id)) or 0,
+        problems_authored=db.scalar(
+            select(func.count()).where(Problem.author_id == user.id, daily.visible_problem_clause())
+        ) or 0,
         recent_solved=[SolvedItem(slug=r.slug, title=r.title, difficulty=r.difficulty) for r in solved_rows[:10]],
         current_streak=daily.effective_streak(user),
         best_streak=user.best_streak,

@@ -27,6 +27,8 @@ LIMITS: dict[str, RateLimitItem] = {
     "run_user": parse("15/minute"),
     "submit_user": parse("6/minute"),
     "create_problem_user": parse("15/hour"),
+    "verify_user": parse("10/minute"),
+    "report_user": parse("10/hour"),
     "daily_tests_user": parse(f"{settings.daily_test_budget}/day"),
 }
 

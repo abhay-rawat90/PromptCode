@@ -85,8 +85,9 @@ class CaseResult:
     cached: bool = False  # output came from the cache
     executed: bool = False  # a real model call was spent on the output (counts toward budgets)
 
-    def public(self, case: TestCase) -> dict:
-        """Serialized result. Hidden tests reveal only pass/fail (and infra errors)."""
+    def public(self, case: TestCase, reveal: bool = False) -> dict:
+        """Serialized result. Hidden tests reveal only pass/fail (and infra errors), unless
+        `reveal` (the problem's author verifying it)."""
         data = {
             "test_id": self.test_id,
             "position": self.position,
@@ -98,12 +99,12 @@ class CaseResult:
             "input": None,
             "expected": None,
             "output": None,
-            "detail": self.detail if (self.is_sample or self.error or self.skipped) else None,
+            "detail": self.detail if (reveal or self.is_sample or self.error or self.skipped) else None,
             "model": llm.display_name(self.model) if self.model else None,
             "backup": self.backup,
             "cached": self.cached,
         }
-        if self.is_sample:
+        if self.is_sample or reveal:
             data.update(input=case.input, expected=case.expected, output=self.output)
         return data
 

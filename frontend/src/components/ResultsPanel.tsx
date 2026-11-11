@@ -20,7 +20,8 @@ function CaseDetail({ r }: { r: TestResult }) {
       </div>
     );
   }
-  if (!r.is_sample) {
+  // Hidden tests come without input/output, except when the author verifies their own problem.
+  if (!r.is_sample && r.input === null) {
     return (
       <div className="case-detail">
         <p className="muted">Hidden test - input and output are not shown.</p>

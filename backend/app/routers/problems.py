@@ -13,14 +13,16 @@ from .. import crypto, daily, grader, llm, ratelimit, usage
 from ..config import settings
 from ..security import get_current_user, get_optional_user
 from ..db import SessionLocal, get_db
-from ..models import Problem, Submission, TestCase, User
+from ..models import Problem, ProblemReport, Submission, TestCase, User, utcnow
 from ..schemas import (
     ProblemDetail,
     ProblemFull,
     ProblemIn,
     ProblemSummary,
+    ReportIn,
     RunIn,
     RunOut,
+    VerifyOut,
     TestCaseIn,
     TestCaseOut,
 )
@@ -42,10 +44,13 @@ def _unique_slug(db: Session, title: str) -> str:
     return slug
 
 
-def _get_problem(db: Session, slug: str) -> Problem:
+def _get_problem(db: Session, slug: str, user: User | None = None) -> Problem:
+    """A problem the user may see. Unreleased dailies are hidden from everyone; problems taken
+    down by moderation are visible to admins only (so they can review them)."""
+    include_hidden = user is not None and user.is_admin
     problem = db.scalar(
         select(Problem)
-        .where(Problem.slug == slug, daily.visible_problem_clause())  # unreleased dailies stay hidden
+        .where(Problem.slug == slug, daily.visible_problem_clause(include_hidden=include_hidden))
         .options(selectinload(Problem.test_cases), selectinload(Problem.daily))
     )
     if not problem:
@@ -58,15 +63,80 @@ def _require_author(problem: Problem, user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the author can modify this problem")
 
 
+def _require_creator(user: User) -> None:
+    if not (settings.allow_user_problems or user.is_admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Creating problems is turned off on this site.")
+    if settings.require_verified_to_publish and not user.email_verified and not user.is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Please verify your email before publishing problems. Check your inbox, or resend the link from Settings.",
+        )
+
+
 def _apply(problem: Problem, body: ProblemIn) -> None:
     problem.title = body.title
     problem.description = body.description
     problem.difficulty = body.difficulty
     problem.tags = ",".join(body.tags)
     problem.starter_prompt = body.starter_prompt
+    problem.reference_prompt = body.reference_prompt
+    problem.verified_at = utcnow()  # only called after verification passed
     problem.test_cases = [
         TestCase(position=i, **tc.model_dump()) for i, tc in enumerate(body.test_cases, start=1)
     ]
+
+
+# ---------- verification (a problem must be solvable before it's published) ----------
+
+NEEDS_REFERENCE = "Add a reference solution prompt. It must pass every test before the problem can be published."
+
+
+async def _verification(body: ProblemIn, user_id: int, own_key: str | None) -> daily.Verification:
+    cases = daily.unsaved_cases(body)
+    with usage.attribute("verify", user_id), llm.own_key(own_key):
+        result = await daily.check_problem(cases, body.reference_prompt)
+    executed = result.reference.executed + (result.trivial.executed if result.trivial else 0)
+    if not own_key and executed:
+        ratelimit.charge("daily_tests_user", str(user_id), cost=executed)
+    return result
+
+
+async def verify_for_publish(body: ProblemIn, user: User) -> None:
+    """Raise unless the problem's reference prompt passes. Usually instant: the author just ran
+    the same check with Verify, so every answer comes from the cache."""
+    if not body.reference_prompt.strip():
+        raise HTTPException(422, NEEDS_REFERENCE)
+    key = _user_key(user)
+    _precheck("verify_user", user, len(body.test_cases), key)
+    result = await _verification(body, user.id, key)
+    if result.infra_error:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"Couldn't verify the problem right now: {result.infra_error}")
+    if result.problems:
+        raise HTTPException(
+            422,
+            "The problem didn't pass verification. Use Verify to see details.\n" + "\n".join(f"- {p}" for p in result.problems),
+        )
+
+
+@router.post("/verify", response_model=VerifyOut)
+async def verify_problem(body: ProblemIn, request: Request, user: User = Depends(get_current_user)):
+    """Run the reference prompt over every test (and check a do-nothing prompt fails), showing
+    the author full details. Supports the live-progress stream like /run."""
+    _require_creator(user)
+    if not body.reference_prompt.strip():
+        raise HTTPException(422, NEEDS_REFERENCE)
+    key = _user_key(user)
+    _precheck("verify_user", user, len(body.test_cases), key)
+    user_id = user.id
+    cases = daily.unsaved_cases(body)
+
+    async def work() -> VerifyOut:
+        result = await _verification(body, user_id, key)
+        out = _run_out(result.reference, cases, user_id, key, reveal=True)
+        problems = [f"Couldn't finish verifying: {result.infra_error}"] if result.infra_error else result.problems
+        return VerifyOut(**out.model_dump(), ok=result.ok, problems=problems)
+
+    return await _respond(request, work, len(cases))
 
 
 def _solved_ids(db: Session, user: User | None) -> set[int]:
@@ -145,9 +215,11 @@ def get_problem(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ) -> ProblemDetail:
-    p = _get_problem(db, slug)
+    p = _get_problem(db, slug, user)
     samples = [t for t in p.test_cases if t.is_sample]
     return ProblemDetail(
+        verified=p.verified_at is not None,
+        hidden_reason=(p.hidden_reason or "Hidden by an admin.") if p.hidden_at else None,
         id=p.id,
         slug=p.slug,
         title=p.title,
@@ -168,7 +240,7 @@ def get_problem(
 def get_problem_full(
     slug: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> ProblemFull:
-    p = _get_problem(db, slug)
+    p = _get_problem(db, slug, user)
     _require_author(p, user)
     return ProblemFull(
         slug=p.slug,
@@ -177,20 +249,18 @@ def get_problem_full(
         difficulty=p.difficulty,
         tags=p.tag_list,
         starter_prompt=p.starter_prompt,
+        reference_prompt=p.reference_prompt or "",
         test_cases=[TestCaseIn.model_validate(t, from_attributes=True) for t in p.test_cases],
     )
 
 
 @router.post("", response_model=ProblemDetail, status_code=status.HTTP_201_CREATED)
-def create_problem(
+async def create_problem(
     body: ProblemIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> ProblemDetail:
-    if settings.require_verified_to_publish and not user.email_verified:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Please verify your email before publishing problems. Check your inbox, or resend the link from Settings.",
-        )
+    _require_creator(user)
     ratelimit.enforce("create_problem_user", str(user.id), message="You're creating problems too quickly. Try again later.")
+    await verify_for_publish(body, user)
     problem = Problem(slug=_unique_slug(db, body.title), author_id=user.id)
     _apply(problem, body)
     db.add(problem)
@@ -199,14 +269,16 @@ def create_problem(
 
 
 @router.put("/{slug}", response_model=ProblemDetail)
-def update_problem(
+async def update_problem(
     slug: str,
     body: ProblemIn,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ProblemDetail:
-    problem = _get_problem(db, slug)
+    problem = _get_problem(db, slug, user)
     _require_author(problem, user)
+    _require_creator(user)
+    await verify_for_publish(body, user)
     _apply(problem, body)
     db.commit()
     return get_problem(slug, db, user)
@@ -214,10 +286,30 @@ def update_problem(
 
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_problem(slug: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> None:
-    problem = _get_problem(db, slug)
+    problem = _get_problem(db, slug, user)
     _require_author(problem, user)
     db.delete(problem)
     db.commit()
+
+
+@router.post("/{slug}/report")
+def report_problem(
+    slug: str, body: ReportIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict:
+    """Flag a broken or unclear problem for an admin. One report per user per problem
+    (reporting again updates it)."""
+    if not user.email_verified:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Verify your email to report problems.")
+    problem = _get_problem(db, slug, user)
+    ratelimit.enforce("report_user", str(user.id), message="You've sent a lot of reports. Please try again later.")
+    report = db.scalar(select(ProblemReport).where(ProblemReport.problem_id == problem.id, ProblemReport.user_id == user.id))
+    if report is None:
+        report = ProblemReport(problem_id=problem.id, user_id=user.id)
+        db.add(report)
+    report.reason, report.note = body.reason, body.note.strip()
+    report.status, report.created_at, report.resolved_at = "open", utcnow(), None
+    db.commit()
+    return {"detail": "Thanks! An admin will take a look."}
 
 
 @router.post("/{slug}/run", response_model=RunOut)
@@ -230,7 +322,7 @@ async def run_samples(
 ):
     """Run the prompt against the visible sample tests only. Nothing is saved.
     Send `Accept: application/x-ndjson` to get live progress events before the result."""
-    problem = _get_problem(db, slug)
+    problem = _get_problem(db, slug, user)
     cases = [t for t in problem.test_cases if t.is_sample]
     key = _user_key(user)
     _precheck("run_user", user, len(cases), key)
@@ -254,7 +346,7 @@ async def submit(
 ):
     """Run the prompt against every test case (stopping at the first failure) and record the
     submission. Supports the same live-progress stream as /run."""
-    problem = _get_problem(db, slug)
+    problem = _get_problem(db, slug, user)
     cases = list(problem.test_cases)
     key = _user_key(user)
     _precheck("submit_user", user, len(cases), key)
@@ -323,14 +415,16 @@ def _save_submission(user_id: int, problem_id: int, prompt: str, out: RunOut) ->
                 out.current_streak = user.current_streak
 
 
-def _run_out(result: grader.EvalResult, cases: list[TestCase], user_id: int, own_key: str | None) -> RunOut:
+def _run_out(
+    result: grader.EvalResult, cases: list[TestCase], user_id: int, own_key: str | None, reveal: bool = False
+) -> RunOut:
     by_id = {c.id: c for c in cases}
     return RunOut(
         daily_remaining=None if own_key else ratelimit.remaining("daily_tests_user", str(user_id)),
         status=result.status,
         passed=result.passed,
         total=len(result.cases),
-        results=[r.public(by_id[r.test_id]) for r in result.cases],
+        results=[r.public(by_id[r.test_id], reveal) for r in result.cases],
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         backup_models=result.backup_models,

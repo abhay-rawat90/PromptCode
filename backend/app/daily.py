@@ -14,6 +14,7 @@ import asyncio
 import logging
 import random
 import re
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 
 from pydantic import ValidationError
@@ -67,9 +68,20 @@ def next_reset() -> datetime:
     return day_start(today() + timedelta(days=1))
 
 
-def visible_problem_clause():
-    """SQL filter: problems that are already public."""
-    return (Problem.available_from.is_(None)) | (Problem.available_from <= now())
+def visible_problem_clause(include_hidden: bool = False):
+    """SQL filter: problems the public can see.
+
+    - unreleased dailies stay hidden until their day;
+    - problems an admin took down are hidden (unless `include_hidden`, for admins);
+    - with ALLOW_USER_PROBLEMS off, only built-in, daily and admin-made problems are shown.
+    """
+    clause = (Problem.available_from.is_(None)) | (Problem.available_from <= now())
+    if not include_hidden:
+        clause = clause & Problem.hidden_at.is_(None)
+    if not settings.allow_user_problems:
+        admins = select(User.id).where(User.is_admin.is_(True))
+        clause = clause & (Problem.author_id.is_(None) | Problem.author_id.in_(admins))
+    return clause
 
 
 # ---------- publishing ----------
@@ -92,6 +104,9 @@ def _build_problem(db: Session, spec: ProblemIn, day: date) -> Problem:
         tags=",".join(tags),
         starter_prompt=spec.starter_prompt,
         available_from=day_start(day),
+        # Queued and AI problems are verified before they get here.
+        reference_prompt=spec.reference_prompt or None,
+        verified_at=now() if spec.reference_prompt else None,
     )
     problem.test_cases = [TestCase(position=i, **tc.model_dump()) for i, tc in enumerate(spec.test_cases, start=1)]
     return problem
@@ -129,7 +144,7 @@ def _brief(day: date, feedback: str | None) -> str:
     return "\n\n".join(parts)
 
 
-def _unsaved_cases(spec: ProblemIn) -> list[TestCase]:
+def unsaved_cases(spec: ProblemIn) -> list[TestCase]:
     return [TestCase(id=i, position=i, **tc.model_dump()) for i, tc in enumerate(spec.test_cases, start=1)]
 
 
@@ -137,33 +152,72 @@ class GenerationAborted(Exception):
     """Stop generating for now (quota used up, API down): more attempts would only waste quota."""
 
 
+@dataclass
+class Verification:
+    """Outcome of checking a problem with its reference prompt."""
+
+    reference: grader.EvalResult
+    trivial: grader.EvalResult | None = None
+    # Why the problem isn't publishable (empty = it's good).
+    problems: list[str] = field(default_factory=list)
+    # Verification couldn't run (quota, API down) - says nothing about the problem itself.
+    infra_error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems and self.infra_error is None
+
+
+def _infra_error(result: grader.EvalResult) -> str | None:
+    errors = sorted({c.detail or "error" for c in result.cases if c.error})
+    return "; ".join(errors) or None
+
+
+TRIVIAL_PROBLEM = "A prompt that just repeats the input ({{input}}) passes every test - add tests that need real work."
+
+
+async def check_problem(cases: list[TestCase], reference_prompt: str) -> Verification:
+    """A problem is good when its reference prompt passes every test and a do-nothing prompt
+    doesn't. Always checked on the main models: it must be solvable on the model solvers get."""
+    with llm.primary_only():
+        reference = await grader.evaluate(reference_prompt, cases)
+    if error := _infra_error(reference):
+        return Verification(reference, infra_error=error)
+    failing = [c for c in reference.cases if not c.passed]
+    if failing:
+        return Verification(reference, problems=[
+            f"Test {c.position} ({c.check_type}): {c.detail or 'failed'}" for c in failing
+        ])
+
+    # Only "does it pass everything?" matters here, so stop at the first failure.
+    with llm.primary_only():
+        trivial = await grader.evaluate(llm.INPUT_PLACEHOLDER, cases, stop_on_failure=True)
+    if error := _infra_error(trivial):
+        return Verification(reference, trivial, infra_error=error)
+    if trivial.passed == len(cases):
+        return Verification(reference, trivial, problems=[TRIVIAL_PROBLEM])
+    return Verification(reference, trivial)
+
+
 async def verify(spec: ProblemIn, reference_prompt: str) -> str | None:
     """Return None if the problem is good, else a description of what's wrong (for the generator
     to fix). Raises GenerationAborted when verification itself couldn't run."""
-    cases = _unsaved_cases(spec)
+    cases = unsaved_cases(spec)
     sample, hidden = sum(c.is_sample for c in cases), sum(not c.is_sample for c in cases)
     if not (4 <= len(cases) <= 8) or sample < 1 or hidden < 2:
         return f"Need 4-8 tests with at least 1 sample and 2 hidden (got {sample} sample, {hidden} hidden)."
 
-    # Verified on the main models only: a problem must be solvable on the model solvers get.
-    with llm.primary_only():
-        reference = await grader.evaluate(reference_prompt, cases)
-    if any(c.error for c in reference.cases):
-        raise GenerationAborted("; ".join(sorted({c.detail or "error" for c in reference.cases if c.error})))
-    failing = [c for c in reference.cases if not c.passed]
+    result = await check_problem(cases, reference_prompt)
+    if result.infra_error:
+        raise GenerationAborted(result.infra_error)
+    failing = [c for c in result.reference.cases if not c.passed]
     if failing:
         lines = [
             f"- test {c.position} ({c.check_type}): {c.detail or 'failed'}; reference output was: {c.output[:300]!r}"
             for c in failing
         ]
         return "The reference prompt failed these tests (fix the tests or the prompt):\n" + "\n".join(lines)
-
-    # Only "does it pass everything?" matters here, so stop at the first failure.
-    with llm.primary_only():
-        trivial = await grader.evaluate(llm.INPUT_PLACEHOLDER, cases, stop_on_failure=True)
-    if any(c.error for c in trivial.cases):
-        raise GenerationAborted("; ".join(sorted({c.detail or "error" for c in trivial.cases if c.error})))
-    if trivial.passed == len(cases):
+    if result.problems:
         return "A prompt that just repeats the input passes every test - the problem is too trivial."
     return None
 
@@ -191,6 +245,7 @@ async def generate_verified(day: date) -> ProblemIn | None:
                 difficulty=generated.difficulty,
                 tags=generated.tags,
                 starter_prompt=generated.starter_prompt,
+                reference_prompt=generated.reference_prompt[: settings.max_prompt_chars],
                 test_cases=[t.model_dump() for t in generated.test_cases],
             )
         except ValidationError as exc:

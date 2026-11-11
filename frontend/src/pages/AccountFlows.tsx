@@ -160,7 +160,7 @@ export function VerifyEmail() {
       {state.status === "working" && <p className="muted"><Spinner small /> Checking your link…</p>}
       {state.status === "ok" && (
         <>
-          <p className="muted"><strong>{state.message}</strong> is verified. You can now publish problems and reset your password by email.</p>
+          <p className="muted"><strong>{state.message}</strong> is verified. You can now report problems and reset your password by email.</p>
           <Link to="/" className="btn primary block">Go to problems</Link>
         </>
       )}
@@ -195,7 +195,7 @@ export function VerifyBanner() {
 
   return (
     <div className="verify-banner" role="status">
-      <span>📧 Please confirm <strong>{user.email}</strong> - check your inbox for our link. You'll need it to publish problems or reset your password.</span>
+      <span>📧 Please confirm <strong>{user.email}</strong> - check your inbox for our link. You'll need it to reset your password.</span>
       <span className="verify-actions">
         <button className="btn ghost small" onClick={resend} disabled={busy}>{busy ? <Spinner small /> : "Resend email"}</button>
         <button className="icon-btn small-icon" onClick={() => setHidden(true)} aria-label="Dismiss">×</button>

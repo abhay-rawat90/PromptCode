@@ -68,6 +68,7 @@ def auth_config() -> AuthConfig:
         google_client_id=settings.google_client_id or None,
         daily_test_budget=settings.daily_test_budget,
         allow_user_keys=settings.allow_user_keys,
+        allow_user_problems=settings.allow_user_problems,
     )
 
 
@@ -254,7 +255,7 @@ def change_password(
     if user.password_hash is not None and not verify_password(body.current_password or "", user.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Your current password is incorrect.")
     if problems := password_problems(body.new_password, user.username, user.email):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, password_error_message(problems))
+        raise HTTPException(422, password_error_message(problems))
     user.password_hash = hash_password(body.new_password)
     user.token_version += 1  # sign out every other device
     db.commit()
@@ -320,7 +321,7 @@ def reset_password(body: ResetPasswordIn, request: Request, response: Response, 
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This reset link is invalid or has expired. Request a new one.")
     if problems := password_problems(body.new_password, user.username, user.email):
         db.rollback()  # keep the token usable so they can try a stronger password
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, password_error_message(problems))
+        raise HTTPException(422, password_error_message(problems))
     user.password_hash = hash_password(body.new_password)
     user.email_verified = True  # they just proved they can read this inbox
     user.token_version += 1  # sign out everywhere else

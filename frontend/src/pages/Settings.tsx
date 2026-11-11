@@ -80,7 +80,7 @@ function EmailCard() {
       </div>
       {!user!.email_verified && (
         <>
-          <p className="muted small">Verify your email to publish problems and to reset your password if you forget it.</p>
+          <p className="muted small">Verify your email so you can reset your password if you forget it, and report broken problems.</p>
           <div className="card-actions">
             <button className="btn primary" onClick={resend} disabled={busy}>{busy ? <Spinner small /> : "Send verification email"}</button>
           </div>

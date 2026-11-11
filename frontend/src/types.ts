@@ -25,6 +25,7 @@ export interface AuthConfig {
   google_client_id: string | null;
   daily_test_budget: number;
   allow_user_keys: boolean;
+  allow_user_problems: boolean;
 }
 
 export interface TestCaseInput {
@@ -67,6 +68,10 @@ export interface ProblemDetail {
   can_edit: boolean;
   solved: boolean;
   daily_day: string | null;
+  /** Its reference solution passed every test. */
+  verified: boolean;
+  /** Only for admins viewing a problem they took down. */
+  hidden_reason: string | null;
 }
 
 export interface ProblemInput {
@@ -75,6 +80,8 @@ export interface ProblemInput {
   difficulty: Difficulty;
   tags: string[];
   starter_prompt: string;
+  /** Private solution that must pass every test before publishing. */
+  reference_prompt: string;
   test_cases: TestCaseInput[];
 }
 
@@ -115,6 +122,13 @@ export interface RunResult {
   skipped?: number;
   own_key?: boolean;
 }
+
+export interface VerifyResult extends RunResult {
+  ok: boolean;
+  problems: string[];
+}
+
+export type ReportReason = "wrong_tests" | "unclear" | "other";
 
 /** Live events streamed while a run/submit is being graded. */
 export type RunProgress =

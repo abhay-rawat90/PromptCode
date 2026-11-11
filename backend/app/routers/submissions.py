@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from .. import daily
 from ..security import get_current_user
 from ..db import get_db
 from ..models import Problem, Submission, User
@@ -57,7 +58,8 @@ def submission_detail(
 def leaderboard(db: Session = Depends(get_db)) -> list[LeaderboardEntry]:
     solved = (
         select(Submission.user_id, func.count(func.distinct(Submission.problem_id)).label("solved"))
-        .where(Submission.status == "accepted")
+        .join(Problem, Problem.id == Submission.problem_id)
+        .where(Submission.status == "accepted", daily.visible_problem_clause())  # hidden problems don't count
         .group_by(Submission.user_id)
         .subquery()
     )

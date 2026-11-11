@@ -80,7 +80,7 @@ export default function ProblemList() {
 
       {problems && visible.length === 0 && (
         <EmptyState title={filtered ? "No problems match" : "No problems yet"}>
-          {filtered ? "Try different filters." : user ? <Link to="/problems/new">Create the first one</Link> : null}
+          {filtered ? "Try different filters." : user?.is_admin ? <Link to="/problems/new">Create the first one</Link> : null}
         </EmptyState>
       )}
 
