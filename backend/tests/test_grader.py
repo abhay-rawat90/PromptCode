@@ -46,47 +46,6 @@ def test_build_request_modes():
     assert build_request("Tell a joke.", "") == (None, "Tell a joke.")
 
 
-def test_gemini_calls_wait_out_rate_limits_and_overloads(monkeypatch):
-    import asyncio
-
-    from google.genai import errors
-
-    from app import llm
-
-    calls, sleeps = [], []
-    failures = [
-        errors.APIError(429, {"error": {"code": 429, "message": "Please retry in 2.5s."}}),
-        errors.APIError(503, {"error": {"code": 503, "message": "overloaded"}}),
-    ]
-
-    class FakeModels:
-        async def generate_content(self, **kwargs):
-            calls.append(kwargs["model"])
-            if failures:
-                raise failures.pop(0)
-            return "response"
-
-    class FakeClient:
-        class aio:
-            models = FakeModels()
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(llm, "get_client", lambda: FakeClient())
-    monkeypatch.setattr(llm.asyncio, "sleep", fake_sleep)
-    assert asyncio.run(llm._generate("m", "hi", None)) == "response"
-    assert len(calls) == 3 and sleeps == [3.5, 2.0]
-
-    # A 400 is a real error and is not retried.
-    failures.append(errors.APIError(400, {"error": {"code": 400, "message": "bad"}}))
-    try:
-        asyncio.run(llm._generate("m", "hi", None))
-        raise AssertionError("expected APIError")
-    except errors.APIError as exc:
-        assert exc.code == 400
-
-
 def test_retry_delay_parsing_per_minute_vs_per_day():
     from google.genai import errors
 

@@ -18,6 +18,8 @@ services:
         value: "true"
       - key: JWT_SECRET
         generateValue: true
+      - key: KEY_ENCRYPTION_SECRET   # encrypts users' own API keys; never change it after launch
+        generateValue: true
       - key: DATABASE_URL
         fromDatabase:
           name: promptcode-db
@@ -31,6 +33,10 @@ services:
       - key: APP_URL              # e.g. https://promptcode.onrender.com (no trailing slash)
         sync: false
       - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY         # free backup models (console.groq.com); optional
+        sync: false
+      - key: MODEL_LIMITS         # optional pacing overrides, e.g. gemini-3.5-flash-lite=15:0:1000
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false

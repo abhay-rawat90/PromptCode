@@ -57,6 +57,32 @@ def enforce(name: str, *identifiers: str, cost: int = 1, message: str | None = N
     )
 
 
+def check(name: str, *identifiers: str, cost: int = 1, message: str | None = None) -> None:
+    """Raise 429 unless `cost` would still fit, without consuming anything (pair with charge())."""
+    item = LIMITS[name]
+    if _limiter.test(item, name, *identifiers, cost=cost):
+        return
+    wait = _retry_after(item, name, *identifiers)
+    raise HTTPException(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        message or f"Too many attempts. Please try again in {_human(wait)}.",
+        headers={"Retry-After": str(wait)},
+    )
+
+
+def charge(name: str, *identifiers: str, cost: int = 1) -> None:
+    """Consume `cost` after the fact (e.g. only the model calls a submission really made)."""
+    item = LIMITS[name]
+    while cost > 0:
+        if _limiter.hit(item, name, *identifiers, cost=cost):
+            return
+        # Not enough left for all of it (concurrent requests): take what remains.
+        left = remaining(name, *identifiers)
+        if left <= 0:
+            return
+        cost = min(cost, left)
+
+
 def remaining(name: str, *identifiers: str) -> int:
     return _limiter.get_window_stats(LIMITS[name], name, *identifiers).remaining
 

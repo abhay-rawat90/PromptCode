@@ -142,6 +142,9 @@ def fake_llm_with_tokens(monkeypatch):
             models = Models()
 
     monkeypatch.setattr(llm, "get_client", lambda: Client())
+    object.__setattr__(settings, "gemini_api_key", "test-key")  # the main model counts as configured
+    yield
+    object.__setattr__(settings, "gemini_api_key", "")
 
 
 def test_usage_is_tracked_per_user_and_capped(make_client, fake_llm_with_tokens, monkeypatch):

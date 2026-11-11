@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, datetime
 from typing import Literal
 
@@ -80,6 +81,18 @@ class TokenIn(BaseModel):
     token: str = Field(min_length=10, max_length=200)
 
 
+class GeminiKeyIn(BaseModel):
+    api_key: str = Field(min_length=20, max_length=200)
+
+    @field_validator("api_key")
+    @classmethod
+    def looks_like_a_key(cls, v: str) -> str:
+        v = v.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_\-]{20,200}", v):
+            raise ValueError("That doesn't look like a Gemini API key (it usually starts with 'AIza').")
+        return v
+
+
 class UsernameAvailability(BaseModel):
     available: bool
     reason: str | None = None
@@ -88,6 +101,7 @@ class UsernameAvailability(BaseModel):
 class AuthConfig(BaseModel):
     google_client_id: str | None
     daily_test_budget: int
+    allow_user_keys: bool = True
 
 
 class MeOut(BaseModel):
@@ -102,6 +116,9 @@ class MeOut(BaseModel):
     is_admin: bool = False
     current_streak: int = 0
     best_streak: int = 0
+    # The user's own Gemini key: whether one is saved, and its last 4 characters.
+    has_own_key: bool = False
+    own_key_hint: str | None = None
     # One-off message for the UI (e.g. "we removed an unverified password").
     notice: str | None = None
 
@@ -121,6 +138,8 @@ class MeOut(BaseModel):
             is_admin=user.is_admin,
             current_streak=effective_streak(user),
             best_streak=user.best_streak,
+            has_own_key=user.gemini_key_enc is not None,
+            own_key_hint=user.gemini_key_hint,
             notice=notice,
         )
 
@@ -255,6 +274,11 @@ class TestResultOut(BaseModel):
     expected: str | None
     output: str | None
     detail: str | None
+    # Defaults keep submissions saved before these fields existed readable.
+    skipped: bool = False
+    model: str | None = None
+    backup: bool = False
+    cached: bool = False
 
 
 class RunOut(BaseModel):
@@ -266,6 +290,11 @@ class RunOut(BaseModel):
     output_tokens: int
     submission_id: int | None = None
     daily_remaining: int | None = None
+    # Backup models that graded some tests because the main model was at its limit.
+    backup_models: list[str] = []
+    cached: int = 0  # results served from the cache
+    skipped: int = 0  # tests not run because an earlier one failed
+    own_key: bool = False  # ran on the user's own Gemini API key
     # Set when this submission solved today's daily problem for the first time.
     streak_extended: bool = False
     current_streak: int | None = None

@@ -43,6 +43,9 @@ class User(Base):
     current_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     best_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_daily_solved: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # The user's own Gemini API key, encrypted (see crypto.py), plus its last 4 characters for display.
+    gemini_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gemini_key_hint: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
 
 # Usernames are unique regardless of case ("Alice" and "alice" can't both exist).
@@ -188,3 +191,33 @@ class UsageDaily(Base):
     requests: Mapped[int] = mapped_column(Integer, default=0)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ModelUsageDaily(Base):
+    """Requests per UTC day and model: what each free-tier quota has been spent on."""
+
+    __tablename__ = "model_usage_daily"
+    __table_args__ = (UniqueConstraint("day", "model", name="uq_model_usage_daily_day_model"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    model: Mapped[str] = mapped_column(String(100))  # "provider:model"
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Answers served from the cache instead of calling the model.
+    cache_hits: Mapped[int] = mapped_column(Integer, default=0)
+    # Rate-limit / quota / server errors from the provider.
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class LLMCache(Base):
+    """Stored model answers keyed by a hash of (model, request), so repeats cost no quota."""
+
+    __tablename__ = "llm_cache"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10))  # run | judge
+    model: Mapped[str] = mapped_column(String(100))
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)

@@ -39,7 +39,9 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         seed(db)
     if not settings.gemini_api_key:
-        log.warning("GEMINI_API_KEY is not set - running prompts will fail until it is.")
+        log.warning("GEMINI_API_KEY is not set - the main models are unavailable until it is.")
+    if not settings.groq_api_key:
+        log.info("GROQ_API_KEY is not set - no backup models when Gemini's free quota runs out.")
     scheduler = None
     if settings.daily_enabled and settings.daily_scheduler:
         scheduler = asyncio.create_task(daily.scheduler())
@@ -121,7 +123,10 @@ async def security_middleware(request: Request, call_next):
     return response
 
 
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+# Progress streams must reach the browser line by line, so they're never compressed (buffered).
+app.add_middleware(
+    GZipMiddleware, minimum_size=1024, exclude_content_types=("text/event-stream", "application/x-ndjson")
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

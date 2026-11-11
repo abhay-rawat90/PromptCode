@@ -506,13 +506,31 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 .case-tab.pass { color: var(--ok); }
 .case-tab.fail { color: var(--bad); }
 .case-tab.active { border-color: currentColor; background: var(--surface); }
+.case-tab.skipped { color: var(--muted); opacity: 0.75; }
+.alert.warn { background: color-mix(in srgb, var(--medium) 12%, transparent); border-color: color-mix(in srgb, var(--medium) 40%, transparent); }
+.small-alert { margin-bottom: 10px; }
+.model-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.cached-pill { font-size: 11.5px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--info-soft); color: var(--link); cursor: help; }
+.running-panel { padding: 6px 0 12px; }
+.running-panel .running { padding: 8px 0; }
+.running-panel .progress { margin: 2px 0 8px; }
+.waiting-note { font-size: 13px; margin: 6px 0; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--medium) 10%, transparent); }
+.quota-table .roles { display: flex; gap: 4px; flex-wrap: wrap; }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.status-dot.ok { background: var(--ok); }
+.status-dot.busy { background: var(--medium); }
+.status-dot.exhausted { background: var(--bad); }
+.status-dot.no_key { background: var(--border-strong); }
+.warning-list { margin: 0 0 18px; padding: 0; list-style: none; display: grid; gap: 8px; }
+.key-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.key-form input { flex: 1 1 260px; min-width: 0; }
 .detail { margin: 4px 0 8px; }
 
 /* ============ profile / settings ============ */
 .profile-header { display: flex; align-items: center; gap: 18px; margin-bottom: 22px; }
 .profile-header h1 { margin: 0; }
 .profile-row { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; }
 .stat-value { font-size: 24px; font-weight: 750; font-variant-numeric: tabular-nums; }
 .stat-label { color: var(--muted); font-size: 12.5px; }

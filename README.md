@@ -123,6 +123,25 @@ How sign-in works:
 | Spend | Every Gemini call is counted per day, per user and per kind of work. Admins see it at `/admin`, and `DAILY_TOKEN_CAP` stops runs for the rest of the day once reached. |
 | Production guard | With `ENVIRONMENT=production`, the server won't start with a weak `JWT_SECRET`, `COOKIE_SECURE` off, SQLite, a non-https `APP_URL` or a missing Resend key. `/docs` is disabled. |
 
+## Free-tier AI quota
+
+Free AI quotas are small (a few requests a minute, a few hundred a day). The server makes them
+go much further:
+
+| What | How |
+|---|---|
+| Pacing | Each model's per-minute allowance is tracked. A burst of requests queues for a few seconds instead of failing, and users see "Waiting for free AI capacity…" with a countdown. |
+| Backup models | When the main Gemini model is out of quota, or busy for more than `FALLBACK_WAIT_SECONDS`, requests go to backups on separate free quotas (Groq's `gpt-oss` and `qwen` models with `GROQ_API_KEY`). Results say "Answered by gpt-oss-20b (backup model)". Daily problems are always verified on the main model. |
+| Cache | Identical requests (same model, prompt and input) reuse the stored answer for `LLM_CACHE_DAYS`: re-running a prompt, Submit re-checking samples that Run already did, and identical judge verdicts. Identical requests in flight at the same moment share one call. |
+| Early stop | Submit runs samples first, then hidden tests in small batches, and stops at the first failure. The rest show as "not run". Most submissions fail, so this saves a lot. |
+| Fair budgets | `DAILY_TEST_BUDGET` counts only real model calls. Cached answers and skipped tests are free. |
+| Own keys | Users can add their own free Gemini key in **Settings**. Their runs use it: no site quota, no daily budget. Keys are checked with Google, encrypted at rest (`KEY_ENCRYPTION_SECRET`), and only the last 4 characters are ever shown. |
+| Visibility | The admin page shows every model's status, requests today against its daily limit, cache hits and errors, with warnings when a quota runs low or a backup is missing. |
+
+Gemini doesn't publish fixed free-tier numbers. Check yours at
+<https://aistudio.google.com/rate-limit> and set `MODEL_LIMITS` to match. Groq's limits are read
+from its responses automatically.
+
 ## Email (Resend)
 
 During development, emails aren't sent. They're printed in the backend terminal, links included
@@ -140,7 +159,8 @@ To send real email:
 
 Make yourself an admin with `.venv\Scripts\python -m app.admin make-admin <username>`. The
 account menu then shows **Admin**, with:
-- Gemini tokens used per day, broken down by run, submit and daily generation;
+- every AI model's quota status (requests today, daily limit, cache hits, errors) and warnings;
+- tokens used per day, broken down by run, submit and daily generation;
 - today's biggest users, and the daily cap;
 - the daily-problem queue.
 
@@ -164,8 +184,8 @@ frontend and serves it, so the site and the API share one origin.
    - `APP_URL`: your service URL, e.g. `https://promptcode.onrender.com`, with no trailing slash.
      You can set it after the first deploy, once you know the URL.
    - `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `RESEND_API_KEY`, `EMAIL_FROM`.
-   - Optionally `SENTRY_DSN` and `DAILY_TOKEN_CAP`.
-   - `JWT_SECRET`, `DATABASE_URL` and the Redis URL are filled in automatically.
+   - Optionally `GROQ_API_KEY` (free backup models), `MODEL_LIMITS`, `SENTRY_DSN` and `DAILY_TOKEN_CAP`.
+   - `JWT_SECRET`, `KEY_ENCRYPTION_SECRET`, `DATABASE_URL` and the Redis URL are filled in automatically.
 4. In Google Cloud → Credentials, add your Render URL to the OAuth client's **Authorized
    JavaScript origins**.
 5. Make yourself an admin: Render → promptcode → **Shell**, then
@@ -206,8 +226,8 @@ For each test case:
 | `llm_judge` | rubric | the judge model decides the output meets every rubric point |
 
 - **Run** checks only the visible sample tests and saves nothing.
-- **Submit** checks every test, including hidden ones, and saves the submission. Hidden tests
-  show only pass or fail.
+- **Submit** checks samples first, then hidden tests, stopping at the first failure, and saves
+  the submission. Hidden tests show only pass or fail.
 
 Keyboard shortcuts: `Ctrl/⌘+Enter` to run, `Ctrl/⌘+Shift+Enter` to submit. Drafts save
 automatically in your browser.
@@ -227,8 +247,11 @@ backend/
     security.py       Argon2, cookie sessions, CSRF, current-user dependencies
     validation.py     username/password rules (mirrored in frontend/src/validation.ts)
     ratelimit.py      memory/Redis rate limits and daily budgets
-    llm.py            Gemini calls (running prompts, LLM judge)
-    grader.py         check logic and parallel evaluation
+    llm.py            model calls: Gemini + Groq backups, fallback chain, own keys
+    quota.py          per-model pacing for free-tier rate limits
+    llm_cache.py      stored answers for identical requests
+    crypto.py         encryption of users' own API keys
+    grader.py         check logic, parallel evaluation, early stop
     routers/          auth, problems, submissions/leaderboard, users (profiles)
 frontend/src/
   pages/              ProblemList, ProblemPage, ProblemForm, AuthPage, Settings, Profile, Submissions, Leaderboard

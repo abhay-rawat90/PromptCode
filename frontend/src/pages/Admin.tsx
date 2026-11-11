@@ -13,6 +13,25 @@ interface UsageDay {
   tokens: Record<"run" | "submit" | "daily" | "other", number>;
   total: number;
 }
+interface ModelQuota {
+  model: string;
+  provider: string;
+  name: string;
+  roles: string[];
+  has_key: boolean;
+  rpm: number;
+  tpm: number;
+  rpd: number;
+  used_last_minute: number;
+  remaining_today: number | null;
+  requests_today: number;
+  tokens_today: number;
+  cache_hits_today: number;
+  failures_today: number;
+  status: "ok" | "busy" | "exhausted" | "no_key";
+  blocked_until: string | null;
+  block_reason: string | null;
+}
 interface UsageReport {
   daily_token_cap: number;
   tokens_today: number;
@@ -21,6 +40,56 @@ interface UsageReport {
   users: number;
   problems: number;
   submissions_today: number;
+  models: ModelQuota[];
+  warnings: string[];
+  cache_hits_today: number;
+  users_with_own_key: number;
+}
+
+const STATUS_LABEL: Record<ModelQuota["status"], string> = {
+  ok: "Available",
+  busy: "At per-minute limit",
+  exhausted: "Out of quota",
+  no_key: "No API key",
+};
+
+function ModelQuotas({ models }: { models: ModelQuota[] }) {
+  return (
+    <div className="card">
+      <h2>AI models &amp; free quota</h2>
+      <p className="muted small">
+        Requests are counted per UTC day by this server. Gemini's free quota resets at midnight Pacific time, and Groq's daily
+        count is reported by Groq itself. Tune pacing with <code>MODEL_LIMITS</code>.
+      </p>
+      <div className="table-wrap">
+        <table className="table compact quota-table">
+          <thead>
+            <tr><th>Model</th><th>Used for</th><th>Status</th><th className="num">Today</th><th className="num">Daily limit</th><th className="num">Last min</th><th className="num">Cache hits</th><th className="num">Errors</th></tr>
+          </thead>
+          <tbody>
+            {models.map((m) => {
+              const left = m.remaining_today ?? (m.rpd ? m.rpd - m.requests_today : null);
+              return (
+                <tr key={m.model}>
+                  <td><strong>{m.name}</strong><div className="muted small">{m.provider}</div></td>
+                  <td><div className="roles">{m.roles.map((r) => <span key={r} className="tag">{r}</span>)}</div></td>
+                  <td>
+                    <span className={`status-dot ${m.status}`} />{STATUS_LABEL[m.status]}
+                    {m.blocked_until && <div className="muted small">until {new Date(m.blocked_until).toLocaleTimeString()}</div>}
+                  </td>
+                  <td className="num">{fmt(m.requests_today)}</td>
+                  <td className="num">{m.rpd ? <>{fmt(m.rpd)}{left !== null && <div className="muted small">{fmt(Math.max(0, left))} left</div>}</> : <span className="muted">?</span>}</td>
+                  <td className="num">{m.used_last_minute}{m.rpm ? ` / ${m.rpm}` : ""}</td>
+                  <td className="num">{fmt(m.cache_hits_today)}</td>
+                  <td className="num">{fmt(m.failures_today)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 const KINDS = ["run", "submit", "daily", "other"] as const;
@@ -68,18 +137,27 @@ export default function Admin() {
   return (
     <div className="page">
       <h1>Admin</h1>
-      <p className="muted">Gemini spend and the daily-problem queue. Days are in UTC.</p>
+      <p className="muted">AI quota and spend, and the daily-problem queue. Days are in UTC.</p>
 
       {usage.error && <ErrorState message={usage.error} onRetry={usage.reload} busy={usage.loading} />}
       {!report && !usage.error && <Skeleton rows={5} />}
       {report && (
         <>
+          {report.warnings.length > 0 && (
+            <ul className="warning-list">
+              {report.warnings.map((w) => <li key={w} className="alert warn">⚠ {w}</li>)}
+            </ul>
+          )}
           <div className="stats">
             <div className="stat"><span className="stat-value">{fmt(report.tokens_today)}</span><span className="stat-label">Tokens today</span></div>
             <div className="stat"><span className="stat-value">{fmt(report.submissions_today)}</span><span className="stat-label">Submissions today</span></div>
             <div className="stat"><span className="stat-value">{fmt(report.users)}</span><span className="stat-label">Users</span></div>
             <div className="stat"><span className="stat-value">{fmt(report.problems)}</span><span className="stat-label">Problems</span></div>
+            <div className="stat"><span className="stat-value">{fmt(report.cache_hits_today)}</span><span className="stat-label">Calls saved by cache today</span></div>
+            <div className="stat"><span className="stat-value">{fmt(report.users_with_own_key)}</span><span className="stat-label">Users with own API key</span></div>
           </div>
+
+          <ModelQuotas models={report.models} />
 
           <div className="card">
             <h2>Daily token budget</h2>

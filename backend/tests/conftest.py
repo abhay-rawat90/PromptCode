@@ -12,6 +12,8 @@ os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///
 os.environ["GOOGLE_CLIENT_ID"] = "test-client-id.apps.googleusercontent.com"
 # Never call the real Gemini API from tests (the developer's .env may hold a real key).
 os.environ["GEMINI_API_KEY"] = ""
+os.environ["GROQ_API_KEY"] = ""
+os.environ["MODEL_LIMITS"] = ""
 os.environ["DAILY_SCHEDULER"] = "false"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -54,7 +56,10 @@ def _app_started():
 
 @pytest.fixture(autouse=True)
 def _fresh_rate_limits():
+    from app import quota
+
     ratelimit.reset()
+    quota.reset()
 
 
 @pytest.fixture

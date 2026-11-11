@@ -10,13 +10,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import emails, ratelimit, tokens
+from .. import crypto, emails, llm, ratelimit, tokens
 from ..config import settings
 from ..db import get_db
 from ..models import User, utcnow
 from ..schemas import (
     AuthConfig,
     ForgotPasswordIn,
+    GeminiKeyIn,
     ResetPasswordIn,
     TokenIn,
     GoogleIn,
@@ -66,6 +67,7 @@ def auth_config() -> AuthConfig:
     return AuthConfig(
         google_client_id=settings.google_client_id or None,
         daily_test_budget=settings.daily_test_budget,
+        allow_user_keys=settings.allow_user_keys,
     )
 
 
@@ -257,6 +259,30 @@ def change_password(
     user.token_version += 1  # sign out every other device
     db.commit()
     start_session(response, user)  # keep this device signed in
+    return MeOut.of(user)
+
+
+@router.put("/me/gemini-key", response_model=MeOut)
+async def set_gemini_key(
+    body: GeminiKeyIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> MeOut:
+    """Save the user's own Gemini API key (checked with Gemini first, stored encrypted)."""
+    if not settings.allow_user_keys:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Personal API keys are turned off on this site.")
+    ratelimit.enforce("account_change", str(user.id))
+    if problem := await llm.check_api_key(body.api_key):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, problem)
+    user.gemini_key_enc = crypto.encrypt(body.api_key)
+    user.gemini_key_hint = body.api_key[-4:]
+    db.commit()
+    return MeOut.of(user)
+
+
+@router.delete("/me/gemini-key", response_model=MeOut)
+def delete_gemini_key(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> MeOut:
+    user.gemini_key_enc = None
+    user.gemini_key_hint = None
+    db.commit()
     return MeOut.of(user)
 
 

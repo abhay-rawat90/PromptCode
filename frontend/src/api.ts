@@ -68,14 +68,75 @@ async function send(path: string, method: string, headers: Record<string, string
   }
 }
 
-export async function api<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
-  const method = options.method ?? "GET";
+function requestHeaders(method: string, hasBody: boolean): Record<string, string> {
   const headers: Record<string, string> = {};
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  if (hasBody) headers["Content-Type"] = "application/json";
   if (UNSAFE.has(method)) {
     const csrf = readCookie(CSRF_COOKIE);
     if (csrf) headers["X-CSRF-Token"] = csrf;
   }
+  return headers;
+}
+
+async function failure(res: Response, path: string): Promise<ApiError> {
+  const body: ErrorBody | null = await res.json().catch(() => null);
+  if (res.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/google")) {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
+  return new ApiError(res.status, errorMessage(body, res.status), body?.fields ?? {});
+}
+
+/**
+ * POST that streams newline-delimited JSON progress events (see RunProgress) and resolves with
+ * the final `result` event's data. Falls back gracefully if a proxy delivers it all at once.
+ */
+export async function apiStream<T, E extends { type: string }>(
+  path: string,
+  body: unknown,
+  onEvent: (event: E) => void,
+): Promise<T> {
+  const headers = { ...requestHeaders("POST", true), Accept: "application/x-ndjson" };
+  const { res, status } = await send(path, "POST", headers, body);
+  if (!res || TRANSIENT.has(status)) {
+    throw new ApiError(status, status === 0 ? "Can't reach the server. Check your connection and try again." : "The server is restarting or busy. Please try again shortly.");
+  }
+  if (!res.ok) throw await failure(res, path);
+  if (!res.headers.get("content-type")?.includes("ndjson")) return (await res.json()) as T;
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: T | undefined;
+  const handle = (line: string) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === "result") result = event.data as T;
+    else if (event.type === "error") throw new ApiError(event.status ?? 500, errorMessage({ detail: event.detail }, event.status ?? 500));
+    else onEvent(event as E);
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) !== -1) {
+        handle(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+      }
+    }
+    handle(buffer);
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    throw new ApiError(0, "The connection dropped while grading. If you submitted, check the Submissions tab - it may still have been saved.");
+  }
+  if (result === undefined) throw new ApiError(0, "The server ended the response early. Please try again.");
+  return result;
+}
+
+export async function api<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
+  const method = options.method ?? "GET";
+  const headers = requestHeaders(method, options.body !== undefined);
 
   // Only GETs are retried: re-sending a POST (e.g. a submission) could run it twice.
   let attempt = await send(path, method, headers, options.body);
@@ -98,12 +159,6 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   }
 
   if (res.status === 204) return undefined as T;
-  const body: ErrorBody | null = await res.json().catch(() => null);
-  if (!res.ok) {
-    if (res.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/google")) {
-      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
-    }
-    throw new ApiError(res.status, errorMessage(body, res.status), body?.fields ?? {});
-  }
-  return body as T;
+  if (!res.ok) throw await failure(res, path);
+  return (await res.json().catch(() => null)) as T;
 }

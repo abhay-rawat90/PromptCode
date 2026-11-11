@@ -147,6 +147,80 @@ function PasswordCard() {
   );
 }
 
+function ApiKeyCard() {
+  const { user, setUser } = useAuth();
+  const toast = useToast();
+  const [key, setKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      setUser(await api<User>("/auth/me/gemini-key", { method: "PUT", body: { api_key: key.trim() } }));
+      setKey("");
+      toast("Key saved. Your runs now use your own Gemini quota.", "success");
+    } catch (err) {
+      setError((err as ApiError).fields?.api_key ?? (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    try {
+      setUser(await api<User>("/auth/me/gemini-key", { method: "DELETE" }));
+      toast("Key removed. You're back on the site's shared models.", "success");
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
+      setConfirmRemove(false);
+    }
+  }
+
+  return (
+    <div className="card settings-card">
+      <h2>Your own Gemini API key <span className="muted small">(optional)</span></h2>
+      <p className="muted">
+        PromptCode runs on shared free-tier AI quota. Add your own free key from{" "}
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Google AI Studio</a> and your runs use it
+        instead: no daily test budget, no waiting for shared capacity, and always the main model.
+      </p>
+      {user!.has_own_key ? (
+        <>
+          <div className="email-row">
+            <span className="mono">••••••••{user!.own_key_hint}</span>
+            <span className="pill-ok">✓ In use</span>
+          </div>
+          <div className="card-actions">
+            <button className="btn danger" onClick={() => setConfirmRemove(true)} disabled={busy}>Remove key</button>
+          </div>
+        </>
+      ) : (
+        <form onSubmit={save}>
+          <div className="field">
+            <label htmlFor="gemini-key">API key</label>
+            <div className="key-form">
+              <input id="gemini-key" type="password" autoComplete="off" spellCheck={false} placeholder="AIza…" value={key}
+                onChange={(e) => setKey(e.target.value)} aria-invalid={Boolean(error)} maxLength={200} />
+              <button className="btn primary" disabled={busy || key.trim().length < 20}>{busy ? <Spinner small /> : "Check & save"}</button>
+            </div>
+            {error ? <p className="field-error">{error}</p> : <p className="field-hint">We check it with Google, then store it encrypted. Only its last 4 characters are ever shown.</p>}
+          </div>
+        </form>
+      )}
+      <ConfirmDialog open={confirmRemove} title="Remove your API key?" confirmLabel="Remove" danger busy={busy} onConfirm={remove} onCancel={() => setConfirmRemove(false)}>
+        Your runs will go back to the site's shared models and daily test budget.
+      </ConfirmDialog>
+    </div>
+  );
+}
+
 function SessionsCard() {
   const { setUser } = useAuth();
   const toast = useToast();
@@ -191,6 +265,7 @@ export default function Settings() {
         <UsernameCard />
         <EmailCard />
         <PasswordCard />
+        <ApiKeyCard />
         <SessionsCard />
       </div>
     </div>

@@ -14,6 +14,9 @@ export interface User {
   is_admin: boolean;
   current_streak: number;
   best_streak: number;
+  /** The user saved their own Gemini API key (shown as its last 4 characters). */
+  has_own_key: boolean;
+  own_key_hint: string | null;
   /** One-off security/info message returned by some auth endpoints. */
   notice?: string | null;
 }
@@ -21,6 +24,7 @@ export interface User {
 export interface AuthConfig {
   google_client_id: string | null;
   daily_test_budget: number;
+  allow_user_keys: boolean;
 }
 
 export interface TestCaseInput {
@@ -85,6 +89,14 @@ export interface TestResult {
   expected: string | null;
   output: string | null;
   detail: string | null;
+  /** Not run because Submit stopped at an earlier failing test. */
+  skipped?: boolean;
+  /** Model that produced the output, e.g. "gemini-3.5-flash-lite". */
+  model?: string | null;
+  /** Graded by a backup model because the main one was at its free-tier limit. */
+  backup?: boolean;
+  /** Served from the answer cache (no quota spent). */
+  cached?: boolean;
 }
 
 export interface RunResult {
@@ -98,7 +110,17 @@ export interface RunResult {
   daily_remaining?: number | null;
   streak_extended?: boolean;
   current_streak?: number | null;
+  backup_models?: string[];
+  cached?: number;
+  skipped?: number;
+  own_key?: boolean;
 }
+
+/** Live events streamed while a run/submit is being graded. */
+export type RunProgress =
+  | { type: "start"; total: number }
+  | { type: "progress"; done: number; total: number; passed: boolean }
+  | { type: "waiting"; model: string; seconds: number; queue: number };
 
 export interface Submission {
   id: number;

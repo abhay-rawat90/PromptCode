@@ -24,14 +24,7 @@ def _norm(text: str, case_sensitive: bool) -> str:
     return text if case_sensitive else text.casefold()
 
 
-def extract_json(output: str) -> str:
-    """Strip a surrounding ```json fence if the model added one."""
-    text = output.strip()
-    if text.startswith("```"):
-        first_newline = text.find("\n")
-        if first_newline != -1 and text.endswith("```"):
-            text = text[first_newline + 1 : -3].strip()
-    return text
+extract_json = llm.extract_json
 
 
 def check_deterministic(
@@ -73,6 +66,9 @@ def check_deterministic(
     raise ValueError(f"Not a deterministic check: {check_type}")
 
 
+SKIPPED_DETAIL = "Not run: an earlier test failed."
+
+
 @dataclass
 class CaseResult:
     test_id: int
@@ -83,6 +79,11 @@ class CaseResult:
     output: str
     detail: str | None
     error: bool = False
+    skipped: bool = False  # not run because Submit stopped at an earlier failure
+    model: str = ""  # model that produced the output ("provider:model")
+    backup: bool = False  # output or verdict came from a backup model
+    cached: bool = False  # output came from the cache
+    executed: bool = False  # a real model call was spent on the output (counts toward budgets)
 
     def public(self, case: TestCase) -> dict:
         """Serialized result. Hidden tests reveal only pass/fail (and infra errors)."""
@@ -93,10 +94,14 @@ class CaseResult:
             "check_type": self.check_type,
             "passed": self.passed,
             "error": self.error,
+            "skipped": self.skipped,
             "input": None,
             "expected": None,
             "output": None,
-            "detail": self.detail if (self.is_sample or self.error) else None,
+            "detail": self.detail if (self.is_sample or self.error or self.skipped) else None,
+            "model": llm.display_name(self.model) if self.model else None,
+            "backup": self.backup,
+            "cached": self.cached,
         }
         if self.is_sample:
             data.update(input=case.input, expected=case.expected, output=self.output)
@@ -114,6 +119,15 @@ class EvalResult:
         return sum(c.passed for c in self.cases)
 
     @property
+    def executed(self) -> int:
+        """Model runs actually spent (cache hits and skipped tests are free)."""
+        return sum(c.executed for c in self.cases)
+
+    @property
+    def backup_models(self) -> list[str]:
+        return sorted({llm.display_name(c.model) for c in self.cases if c.backup and c.model})
+
+    @property
     def status(self) -> str:
         if self.passed == len(self.cases):
             return "accepted"
@@ -123,12 +137,15 @@ class EvalResult:
 
 
 async def _grade_case(prompt: str, case: TestCase, totals: EvalResult) -> CaseResult:
-    def result(passed: bool, output: str, detail: str | None, error: bool = False) -> CaseResult:
-        return CaseResult(case.id, case.position, case.is_sample, case.check_type, passed, output, detail, error)
-
     run = await llm.run_prompt(prompt, case.input)
     totals.input_tokens += run.input_tokens
     totals.output_tokens += run.output_tokens
+    meta = {"model": run.model, "backup": run.backup, "cached": run.cached,
+            "executed": not run.cached and bool(run.model or not run.error)}
+
+    def result(passed: bool, output: str, detail: str | None, error: bool = False) -> CaseResult:
+        return CaseResult(case.id, case.position, case.is_sample, case.check_type, passed, output, detail, error, **meta)
+
     if run.error:
         # A truncated output is the prompt's fault, not an infrastructure error.
         is_infra = not run.error.startswith("Output was cut off")
@@ -138,21 +155,51 @@ async def _grade_case(prompt: str, case: TestCase, totals: EvalResult) -> CaseRe
         passed, detail = check_deterministic(case.check_type, case.expected, run.text, case.case_sensitive)
         return result(passed, run.text, detail)
 
+    if not run.text.strip():  # nothing to judge: don't spend a judge call
+        return result(False, run.text, "The model returned an empty output.")
     passed, reasoning, usage = await llm.judge(case.expected, case.input, run.text)
     totals.input_tokens += usage.input_tokens
     totals.output_tokens += usage.output_tokens
+    meta["backup"] = meta["backup"] or usage.backup
     if usage.error:
         return result(False, run.text, usage.error, error=True)
     return result(passed, run.text, reasoning or None)
 
 
-async def evaluate(prompt: str, cases: list[TestCase]) -> EvalResult:
+def _skipped(case: TestCase) -> CaseResult:
+    return CaseResult(case.id, case.position, case.is_sample, case.check_type, False, "", SKIPPED_DETAIL, skipped=True)
+
+
+async def evaluate(prompt: str, cases: list[TestCase], *, stop_on_failure: bool = False) -> EvalResult:
+    """Grade `prompt` on `cases`. With stop_on_failure (Submit), samples run first, then hidden
+    tests in small batches, and grading stops after the batch with the first failure - the rest
+    are reported as skipped. Most submissions fail, so this saves a lot of quota."""
     totals = EvalResult()
     semaphore = asyncio.Semaphore(settings.max_concurrency)
+    done = 0
 
     async def bounded(case: TestCase) -> CaseResult:
+        nonlocal done
         async with semaphore, _global_slots:
-            return await _grade_case(prompt, case, totals)
+            result = await _grade_case(prompt, case, totals)
+        done += 1
+        llm.emit({"type": "progress", "done": done, "total": len(cases), "passed": result.passed})
+        return result
 
-    totals.cases = list(await asyncio.gather(*(bounded(c) for c in cases)))
+    if not stop_on_failure:
+        totals.cases = list(await asyncio.gather(*(bounded(c) for c in cases)))
+        return totals
+
+    ordered = sorted(cases, key=lambda c: (not c.is_sample, c.position))
+    by_id: dict[int, CaseResult] = {}
+    batch_size = max(1, settings.max_concurrency)
+    for start in range(0, len(ordered), batch_size):
+        batch = ordered[start : start + batch_size]
+        for result in await asyncio.gather(*(bounded(c) for c in batch)):
+            by_id[result.test_id] = result
+        if any(not by_id[c.id].passed for c in batch):
+            for case in ordered[start + batch_size :]:
+                by_id[case.id] = _skipped(case)
+            break
+    totals.cases = [by_id[c.id] for c in cases]
     return totals

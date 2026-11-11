@@ -145,7 +145,9 @@ async def verify(spec: ProblemIn, reference_prompt: str) -> str | None:
     if not (4 <= len(cases) <= 8) or sample < 1 or hidden < 2:
         return f"Need 4-8 tests with at least 1 sample and 2 hidden (got {sample} sample, {hidden} hidden)."
 
-    reference = await grader.evaluate(reference_prompt, cases)
+    # Verified on the main models only: a problem must be solvable on the model solvers get.
+    with llm.primary_only():
+        reference = await grader.evaluate(reference_prompt, cases)
     if any(c.error for c in reference.cases):
         raise GenerationAborted("; ".join(sorted({c.detail or "error" for c in reference.cases if c.error})))
     failing = [c for c in reference.cases if not c.passed]
@@ -156,7 +158,9 @@ async def verify(spec: ProblemIn, reference_prompt: str) -> str | None:
         ]
         return "The reference prompt failed these tests (fix the tests or the prompt):\n" + "\n".join(lines)
 
-    trivial = await grader.evaluate(llm.INPUT_PLACEHOLDER, cases)
+    # Only "does it pass everything?" matters here, so stop at the first failure.
+    with llm.primary_only():
+        trivial = await grader.evaluate(llm.INPUT_PLACEHOLDER, cases, stop_on_failure=True)
     if any(c.error for c in trivial.cases):
         raise GenerationAborted("; ".join(sorted({c.detail or "error" for c in trivial.cases if c.error})))
     if trivial.passed == len(cases):

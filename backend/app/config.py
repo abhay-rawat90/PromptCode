@@ -77,6 +77,40 @@ class Settings:
     # Site-wide cap on Gemini tokens per UTC day (0 = no cap). Runs and submits stop when reached.
     daily_token_cap: int = int(os.getenv("DAILY_TOKEN_CAP", "0"))
 
+    # ---- quota handling (free tiers) ----
+    # Groq (free key at console.groq.com) supplies backup models when Gemini is at its limit.
+    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    # Backup models tried in order when the main model is out of quota or too busy.
+    # Format: "provider:model" (provider is gemini or groq). Empty = no backups.
+    run_fallback_models: list[str] = field(
+        default_factory=lambda: _list("RUN_FALLBACK_MODELS", "groq:openai/gpt-oss-20b,groq:qwen/qwen3.8-27b")
+    )
+    judge_fallback_models: list[str] = field(
+        default_factory=lambda: _list(
+            "JUDGE_FALLBACK_MODELS",
+            "groq:openai/gpt-oss-120b,gemini:" + os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        )
+    )
+    daily_fallback_models: list[str] = field(
+        default_factory=lambda: _list("DAILY_FALLBACK_MODELS", "groq:openai/gpt-oss-120b")
+    )
+    # Per-model pacing, overriding the built-in defaults: "model=rpm:tpm:rpd,..." (0 = no limit).
+    # Check your real free-tier numbers at https://aistudio.google.com/rate-limit and console.groq.com.
+    model_limits: str = os.getenv("MODEL_LIMITS", "")
+    # How long a request waits for the main model's per-minute capacity before using a backup,
+    # and how long a user's request waits for any model at all.
+    fallback_wait_seconds: float = float(os.getenv("FALLBACK_WAIT_SECONDS", "10"))
+    user_wait_seconds: float = float(os.getenv("USER_WAIT_SECONDS", "45"))
+    # Identical requests (same model, prompt, input) reuse a stored answer for this many days.
+    llm_cache_days: int = int(os.getenv("LLM_CACHE_DAYS", "30"))
+    # Sampling temperature for solver prompts; empty = the model's default.
+    run_temperature: str = os.getenv("RUN_TEMPERATURE", "")
+    # Users may add their own Gemini API key (their runs then don't touch the site's quota).
+    allow_user_keys: bool = _bool("ALLOW_USER_KEYS", True)
+    # Encrypts stored user API keys. Defaults to a key derived from JWT_SECRET; set it separately
+    # so rotating JWT_SECRET doesn't make stored keys unreadable.
+    key_encryption_secret: str = os.getenv("KEY_ENCRYPTION_SECRET", "")
+
     # ---- daily challenge ----
     daily_enabled: bool = _bool("DAILY_ENABLED", True)
     # Run the background job that prepares today's and tomorrow's problem. With several

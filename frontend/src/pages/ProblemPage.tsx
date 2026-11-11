@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
-import { api, ApiError } from "../api";
+import { api, apiStream, ApiError } from "../api";
 import { useAuth } from "../auth";
 import { DifficultyBadge, StatusText } from "../components/Badges";
 import ResultsPanel from "../components/ResultsPanel";
 import { formatDay } from "../components/Daily";
 import { Celebration, ConfirmDialog, EmptyState, ErrorState, Skeleton, Spinner } from "../components/ui";
 import { useToast } from "../toast";
-import { CHECK_LABELS, type ProblemDetail, type RunResult, type Submission, type SubmissionDetail } from "../types";
+import { CHECK_LABELS, type ProblemDetail, type RunProgress, type RunResult, type Submission, type SubmissionDetail } from "../types";
 
 const MAX_PROMPT = 8000;
 const draftKey = (slug: string) => `promptcode.draft.${slug}`;
@@ -48,6 +48,44 @@ function DailyBanner({ day }: { day: string }) {
 }
 type Kind = "run" | "submit";
 
+interface Progress {
+  done: number;
+  total: number;
+  waiting: { model: string; seconds: number; since: number } | null;
+}
+
+/** Live status while tests run: a progress bar, and a countdown while waiting for model capacity. */
+function RunningPanel({ kind, progress, ownKey }: { kind: Kind; progress: Progress; ownKey: boolean }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!progress.waiting) return;
+    const id = window.setInterval(() => tick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [progress.waiting]);
+
+  const { done, total, waiting } = progress;
+  const left = waiting ? Math.max(0, Math.ceil(waiting.seconds - (Date.now() - waiting.since) / 1000)) : 0;
+  const pct = total ? (100 * done) / total : 0;
+  return (
+    <div className="running-panel" role="status" aria-live="polite">
+      <div className="running">
+        <Spinner />
+        <span>
+          {total ? `${kind === "submit" ? "Testing" : "Running"} ${Math.min(done + 1, total)} of ${total}…` : "Starting…"}
+          {kind === "submit" && <span className="muted small"> Stops at the first failing test.</span>}
+        </span>
+      </div>
+      <div className="progress"><div className="progress-fill diff-bg-easy" style={{ width: `${pct}%` }} /></div>
+      {waiting && left > 0 && (
+        <p className="waiting-note">
+          ⏳ Waiting for free AI capacity on <strong>{waiting.model}</strong>{left ? ` (~${left}s)` : ""}. Your tests are queued, not lost.
+        </p>
+      )}
+      {ownKey && <p className="muted small">Using your own Gemini API key.</p>}
+    </div>
+  );
+}
+
 export default function ProblemPage() {
   const { slug = "" } = useParams();
   const { user, setUser } = useAuth();
@@ -67,6 +105,7 @@ export default function ProblemPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
+  const [progress, setProgress] = useState<Progress>({ done: 0, total: 0, waiting: null });
   const saveTimer = useRef<number>();
   const resultsRef = useRef<HTMLDivElement>(null);
   const editorSlug = useRef<string | null>(null);
@@ -117,8 +156,13 @@ export default function ProblemPage() {
       }
       if (!canExecute) return;
       setBusy(kind);
+      setProgress({ done: 0, total: kind === "run" ? problem?.sample_tests.length ?? 0 : 0, waiting: null });
       try {
-        const data = await api<RunResult>(`/problems/${slug}/${kind}`, { method: "POST", body: { prompt } });
+        const data = await apiStream<RunResult, RunProgress>(`/problems/${slug}/${kind}`, { prompt }, (ev) => {
+          if (ev.type === "start") setProgress((p) => ({ ...p, total: ev.total }));
+          else if (ev.type === "progress") setProgress({ done: ev.done, total: ev.total, waiting: null });
+          else if (ev.type === "waiting") setProgress((p) => ({ ...p, waiting: { model: ev.model, seconds: ev.seconds, since: Date.now() } }));
+        });
         setResult({ data, kind, id: Date.now() });
         if (kind === "submit" && data.status === "accepted") {
           setProblem((p) => (p ? { ...p, solved: true } : p));
@@ -142,7 +186,7 @@ export default function ProblemPage() {
         setBusy(null);
       }
     },
-    [user, setUser, canExecute, slug, prompt, navigate, location.pathname, toast],
+    [user, setUser, canExecute, slug, prompt, navigate, location.pathname, toast, problem],
   );
 
   // Ctrl/⌘+Enter runs samples; Ctrl/⌘+Shift+Enter submits.
@@ -306,11 +350,7 @@ export default function ProblemPage() {
           </div>
         )}
         <div ref={resultsRef}>
-          {busy && (
-            <div className="running">
-              <Spinner /> Calling the model for each test case…
-            </div>
-          )}
+          {busy && <RunningPanel kind={busy} progress={progress} ownKey={Boolean(user?.has_own_key)} />}
           {result && !busy && <ResultsPanel key={result.id} result={result.data} kind={result.kind} />}
         </div>
       </section>
