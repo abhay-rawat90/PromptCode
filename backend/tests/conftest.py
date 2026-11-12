@@ -56,10 +56,12 @@ def _app_started():
 
 @pytest.fixture(autouse=True)
 def _fresh_rate_limits():
-    from app import quota
+    from app import daily, quota, reminders
 
     ratelimit.reset()
     quota.reset()
+    daily._ready_days.clear()
+    reminders._done_day = None
 
 
 @pytest.fixture

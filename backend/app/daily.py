@@ -323,11 +323,22 @@ async def _ensure_daily(day: date) -> DailyChallenge | None:
             return _publish(db, spec, day, "ai")
 
 
+# Days known to have their problem. The scheduler skips them, so once today's and tomorrow's
+# problems exist it makes no database queries at all, letting a serverless database (Neon)
+# sleep instead of spending its free compute hours.
+_ready_days: set[date] = set()
+
+
 async def ensure_upcoming() -> None:
     """Prepare today's problem, then tomorrow's (so it's ready at midnight)."""
-    for day in (today(), today() + timedelta(days=1)):
+    days = (today(), today() + timedelta(days=1))
+    _ready_days.intersection_update(days)  # forget past days
+    for day in days:
+        if day in _ready_days:
+            continue
         try:
-            await ensure_daily(day)
+            if await ensure_daily(day) is not None:
+                _ready_days.add(day)
         except Exception:  # noqa: BLE001 - never let the scheduler die
             log.exception("Daily %s: unexpected error", day)
 

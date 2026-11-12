@@ -5,7 +5,7 @@ services:
   - type: web
     name: promptcode
     runtime: docker
-    plan: free            # free instances sleep when idle; use "starter" to keep the daily scheduler awake
+    plan: free            # free instances sleep when idle: ping /api/uptime (e.g. UptimeRobot) to keep it awake
     region: oregon
     healthCheckPath: /api/health
     autoDeploy: true
@@ -20,10 +20,10 @@ services:
         generateValue: true
       - key: KEY_ENCRYPTION_SECRET   # encrypts users' own API keys; never change it after launch
         generateValue: true
+      # Postgres connection string. Free option that doesn't expire: Neon (neon.com), using the
+      # *direct* (non-pooler) string. See README "Database" for moving data between databases.
       - key: DATABASE_URL
-        fromDatabase:
-          name: promptcode-db
-          property: connectionString
+        sync: false
       - key: RATE_LIMIT_STORAGE
         fromService:
           type: keyvalue
@@ -58,11 +58,9 @@ services:
     plan: free
     ipAllowList: []       # only reachable from your Render services
 
-databases:
-  - name: promptcode-db
-    plan: free            # note: Render's free Postgres expires after 30 days - upgrade to keep data
-    databaseName: promptcode
-    user: promptcode
+# The database lives outside Render (Neon's free plan keeps data with no expiry), so there's no
+# `databases:` section. To use Render Postgres instead (paid; the free one expires after 30
+# days), add one back and set DATABASE_URL with `fromDatabase`.
 
 # Streak reminder emails on the free plan: the web service sleeps when idle, so add a Cron Job
 # (a paid Render feature) that runs `python -m app.reminders` at 18:00 UTC with the same

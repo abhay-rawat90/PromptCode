@@ -18,6 +18,8 @@ from .db import SessionLocal
 from .models import DailyChallenge, User
 
 log = logging.getLogger("promptcode.reminders")
+# The day whose reminders are finished: later calls that day return without touching the database.
+_done_day = None
 
 
 # ---------- unsubscribe links (no login needed, so they're signed) ----------
@@ -44,8 +46,9 @@ def send_due() -> int:
     and the daily cap is never exceeded. Returns how many were sent."""
     if not (settings.reminders_enabled and settings.daily_enabled):
         return 0
+    global _done_day
     now, day = daily.now(), daily.today()
-    if now.hour < settings.reminder_hour_utc:
+    if now.hour < settings.reminder_hour_utc or _done_day == day:
         return 0
 
     with SessionLocal() as db:
@@ -82,6 +85,8 @@ def send_due() -> int:
                 sent += 1
         if users:
             log.info("Streak reminders: sent %d of %d", sent, len(users))
+        if len(users) < room:
+            _done_day = day  # everyone due has been handled (if the cap bit, try again later)
         return sent
 
 

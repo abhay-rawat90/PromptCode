@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -11,13 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
+from . import daily, ratelimit
 from .config import settings
-from .db import SessionLocal
+from .db import SessionLocal, engine
 from .migrations import upgrade_database
-from . import daily
 from .routers import admin, auth, community, daily as daily_routes, problems, submissions, users
-from .security import SESSION_COOKIE, csrf_ok
+from .security import SESSION_COOKIE, client_ip, csrf_ok
 from .seed import seed
 
 log = logging.getLogger("promptcode")
@@ -159,9 +161,34 @@ app.include_router(daily_routes.router)
 app.include_router(admin.router)
 
 
-@app.get("/api/health")
+_started = time.monotonic()
+
+
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.api_route("/api/uptime", methods=["GET", "HEAD"])
+def uptime(request: Request, db: bool = False):
+    """For uptime monitors such as UptimeRobot (GET or HEAD; 200 = up, 503 = down).
+
+    By default it doesn't touch the database, so pinging it every few minutes keeps the web
+    service awake while a serverless database can still sleep. `?db=1` also checks the
+    database: use that from a monitor that runs rarely (every hour or so), because each check
+    wakes the database. It's rate-limited per IP so nobody can keep the database awake.
+    """
+    body = {"status": "ok", "uptime_seconds": int(time.monotonic() - _started)}
+    if db:
+        ratelimit.enforce("uptime_db_ip", client_ip(request), message="Database checks are limited. Try again later.")
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except Exception:  # noqa: BLE001
+            log.exception("Uptime check: database unreachable")
+            return JSONResponse({"status": "error", "database": "unreachable"}, status_code=503)
+        body["database"] = "ok"
+    return body
 
 
 # ---------- built frontend (single-origin deployment) ----------

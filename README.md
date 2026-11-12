@@ -197,30 +197,59 @@ Verified problems show a "✓ Verified" badge.
 ## Deploying to Render
 
 The repo includes a `Dockerfile` and a Render Blueprint (`render.yaml`) that create the web
-service, Postgres and Redis (Key Value) together. The web service's Docker image builds the
-frontend and serves it, so the site and the API share one origin.
+service and Redis (Key Value). The database is a free [Neon](https://neon.com) Postgres, which
+keeps data with no expiry (Render's free Postgres is deleted after 30 days). The Docker image
+builds the frontend and serves it, so the site and the API share one origin.
 
-1. Push the repo to GitHub.
-2. In Render, choose **New → Blueprint**, pick the repo, and approve the three resources.
-3. Fill in the secret values it asks for:
-   - `APP_URL`: your service URL, e.g. `https://promptcode.onrender.com`, with no trailing slash.
-     You can set it after the first deploy, once you know the URL.
-   - `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `RESEND_API_KEY`, `EMAIL_FROM`.
+1. **Database:** create a free Neon project (region *AWS US West (Oregon)*, next to Render's
+   `oregon` region). On its dashboard, click **Connect**, turn **Connection pooling off**, and
+   copy the connection string (`postgresql://…neon.tech/neondb?sslmode=require…`).
+2. Push the repo to GitHub. In Render, choose **New → Blueprint**, pick the repo, and fill in:
+   - `DATABASE_URL`: the Neon connection string.
+   - `APP_URL`: the site's address, e.g. `https://promptcode.onrender.com`, with no trailing slash.
+   - `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `RESEND_API_KEY`, `EMAIL_FROM`, `CONTACT_EMAIL`.
    - Optionally `GROQ_API_KEY` (free backup models), `MODEL_LIMITS`, `SENTRY_DSN` and `DAILY_TOKEN_CAP`.
-   - `JWT_SECRET`, `KEY_ENCRYPTION_SECRET`, `DATABASE_URL` and the Redis URL are filled in automatically.
-4. In Google Cloud → Credentials, add your Render URL to the OAuth client's **Authorized
+   - `JWT_SECRET`, `KEY_ENCRYPTION_SECRET` and the Redis URL are filled in automatically.
+3. In Google Cloud → Credentials, add the site's address to the OAuth client's **Authorized
    JavaScript origins**.
-5. Make yourself an admin: Render → promptcode → **Shell**, then
-   `python -m app.admin make-admin <username>`.
+4. Make yourself an admin from your own computer (Render's free plan has no Shell):
+   ```powershell
+   cd backend
+   $env:DATABASE_URL = "<the Neon connection string>"
+   .venv\Scripts\python -m app.admin make-admin <username>
+   Remove-Item Env:DATABASE_URL
+   ```
 
 Migrations run automatically at startup. Pushing to `main` redeploys.
 
-Things to know about Render's free plans:
-- Free web services **sleep after 15 minutes idle** and take about a minute to wake. The daily
-  scheduler only runs while the service is awake; the first visit of the day wakes it and
-  prepares the problem. The `starter` plan stays awake.
-- Free Postgres **expires after 30 days**. Upgrade it, which also turns on daily backups, before
-  you have real users.
+### Database
+
+- **Neon's free plan:** 1 GB of storage and 100 compute-hours a month; the database sleeps after
+  5 idle minutes and wakes in about a second. The app is written so an idle site lets it sleep:
+  the background scheduler stops querying once today's and tomorrow's problems exist and the
+  day's reminders are sent.
+- **Copy all data between databases** (moving hosts, or a backup on your computer):
+  ```powershell
+  cd backend
+  .venv\Scripts\python -m app.dbcopy --from "<source url>" --to "<target url>"
+  .venv\Scripts\python -m app.dbcopy --from "<neon url>" --to sqlite:///backup-2026-11-12.db
+  ```
+  The target is migrated first and must be empty (`--replace` wipes it). Stored AI answers are
+  skipped unless you add `--include-cache`.
+
+### Keeping the site awake
+
+Free Render services sleep after 15 minutes without traffic and take about a minute to wake;
+the daily problem and streak reminders also only run while the service is awake. A free
+[UptimeRobot](https://uptimerobot.com) monitor fixes that:
+
+| Endpoint | Use | Touches the database? |
+|---|---|---|
+| `GET` or `HEAD /api/uptime` | Keep-awake monitor, every 5 minutes | No, so Neon can still sleep |
+| `GET /api/uptime?db=1` | Optional health check, every 60 minutes or more | Yes (`SELECT 1`); 503 if unreachable; limited to 20 per hour per IP |
+
+Don't put `?db=1` on a 5-minute monitor: it would keep Neon awake around the clock and use up
+its free compute hours.
 
 **Scaling beyond one instance:** keep `--workers 1` and add instances instead. Set
 `DAILY_SCHEDULER=false` on all but one, or on all of them plus a Render Cron Job running

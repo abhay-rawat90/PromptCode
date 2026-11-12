@@ -11,15 +11,17 @@ config = context.config
 if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
-# The app's DATABASE_URL is the single source of truth.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# The app's DATABASE_URL is the source of truth; tools (app.dbcopy) can target another
+# database by passing `database_url` in the config attributes.
+database_url = config.attributes.get("database_url") or settings.database_url
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
-is_sqlite = settings.database_url.startswith("sqlite")
+is_sqlite = database_url.startswith("sqlite")
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.database_url,
+        url=database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
