@@ -174,7 +174,7 @@ function TabBar() {
 function Footer() {
   return (
     <footer className="footer">
-      <span><span className="brand-mark">{"{ }"}</span> PromptCode · practice prompt engineering</span>
+      <span><span className="brand-mark">{"{ }"}</span> PromptCode · Prompt engineering practice</span>
       <span className="footer-links">
         <NavLink to="/">Problems</NavLink>
         <NavLink to="/daily">Daily</NavLink>

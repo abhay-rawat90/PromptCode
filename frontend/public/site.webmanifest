@@ -1,7 +1,7 @@
 {
   "name": "PromptCode",
   "short_name": "PromptCode",
-  "description": "Practice prompt engineering: real tasks, automatic tests and a new challenge every day.",
+  "description": "Get good at writing prompts that actually work. Hands-on problems with automatic tests, hints, and a new challenge every day.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0d0f13",

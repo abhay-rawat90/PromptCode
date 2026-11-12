@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -175,4 +176,11 @@ if FRONTEND_DIST.is_dir():
         file = (FRONTEND_DIST / path).resolve()
         if path and file.is_file() and FRONTEND_DIST in file.parents:
             return FileResponse(file)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return HTMLResponse(_index_html())
+
+
+@functools.cache
+def _index_html() -> str:
+    """index.html with the site's address filled in: link previews (og:image, og:url) need
+    absolute URLs, and the address is only known at deploy time (APP_URL)."""
+    return (FRONTEND_DIST / "index.html").read_text(encoding="utf-8").replace("__APP_URL__", settings.app_url)
