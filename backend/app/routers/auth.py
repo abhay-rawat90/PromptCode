@@ -70,6 +70,7 @@ def auth_config() -> AuthConfig:
         daily_test_budget=settings.daily_test_budget,
         allow_user_keys=settings.allow_user_keys,
         allow_user_problems=settings.allow_user_problems,
+        contact_email=settings.contact_email or None,
     )
 
 

@@ -28,6 +28,8 @@ export interface AuthConfig {
   daily_test_budget: number;
   allow_user_keys: boolean;
   allow_user_problems: boolean;
+  /** Public contact address for privacy and terms questions. */
+  contact_email: string | null;
 }
 
 export interface TestCaseInput {

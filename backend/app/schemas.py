@@ -103,6 +103,7 @@ class AuthConfig(BaseModel):
     daily_test_budget: int
     allow_user_keys: bool = True
     allow_user_problems: bool = False
+    contact_email: str | None = None
 
 
 class MeOut(BaseModel):

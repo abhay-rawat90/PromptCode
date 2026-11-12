@@ -44,6 +44,8 @@ services:
         sync: false
       - key: EMAIL_FROM           # e.g. PromptCode <no-reply@yourdomain.com> (domain verified in Resend)
         sync: false
+      - key: CONTACT_EMAIL        # shown on /privacy and /terms for data requests
+        sync: false
       - key: SENTRY_DSN           # optional
         sync: false
       - key: REMINDER_DAILY_CAP   # optional; streak reminder emails per day (default 90)

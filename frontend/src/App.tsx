@@ -8,6 +8,7 @@ import Admin from "./pages/Admin";
 import AuthPage from "./pages/AuthPage";
 import DailyArchive from "./pages/DailyArchive";
 import Leaderboard from "./pages/Leaderboard";
+import { PrivacyPage, TermsPage } from "./pages/Legal";
 import ProblemForm from "./pages/ProblemForm";
 import ProblemList from "./pages/ProblemList";
 import ProblemPage from "./pages/ProblemPage";
@@ -179,6 +180,8 @@ function Footer() {
         <NavLink to="/">Problems</NavLink>
         <NavLink to="/daily">Daily</NavLink>
         <NavLink to="/leaderboard">Leaderboard</NavLink>
+        <NavLink to="/privacy">Privacy</NavLink>
+        <NavLink to="/terms">Terms</NavLink>
       </span>
     </footer>
   );
@@ -210,6 +213,8 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/unsubscribe" element={<Unsubscribe />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
           <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
           <Route path="/u/:username" element={<Profile />} />
           <Route path="/problems/new" element={<RequireAuth><ProblemForm /></RequireAuth>} />

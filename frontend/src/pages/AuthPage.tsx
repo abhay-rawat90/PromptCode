@@ -216,7 +216,12 @@ export default function AuthPage({ mode }: { mode: "login" | "register" }) {
             {busy ? <Spinner small /> : isLogin ? "Log in" : "Create account"}
           </button>
 
-          {!isLogin && <p className="fine-print">By creating an account you agree to use PromptCode respectfully - no abusive content in prompts or problems.</p>}
+          {!isLogin && (
+            <p className="fine-print">
+              By creating an account you agree to the <Link to="/terms">Terms of Use</Link> and{" "}
+              <Link to="/privacy">Privacy Policy</Link>.
+            </p>
+          )}
         </form>
       </main>
     </div>

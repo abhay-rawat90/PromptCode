@@ -51,6 +51,8 @@ class Settings:
     trust_proxy: bool = _bool("TRUST_PROXY", False)
     trusted_proxy_hops: int = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
     sentry_dsn: str = os.getenv("SENTRY_DSN", "")
+    # Public contact address shown on the Privacy Policy and Terms pages (data requests, questions).
+    contact_email: str = os.getenv("CONTACT_EMAIL", "")
 
     # ---- email ----
     # "resend" sends through Resend's API; "console" logs emails (local development).
