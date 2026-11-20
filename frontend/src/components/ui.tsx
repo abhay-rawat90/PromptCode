@@ -52,11 +52,13 @@ interface ConfirmProps {
   confirmLabel: string;
   danger?: boolean;
   busy?: boolean;
+  /** Disable the confirm button (e.g. until a form is valid). */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-export function ConfirmDialog({ open, title, children, confirmLabel, danger, busy, onConfirm, onCancel }: ConfirmProps) {
+export function ConfirmDialog({ open, title, children, confirmLabel, danger, busy, confirmDisabled, onConfirm, onCancel }: ConfirmProps) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const d = ref.current;
@@ -66,12 +68,18 @@ export function ConfirmDialog({ open, title, children, confirmLabel, danger, bus
   }, [open]);
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={(e) => { e.preventDefault(); onCancel(); }}>
+    <dialog
+      ref={ref}
+      className="dialog"
+      onCancel={(e) => { e.preventDefault(); onCancel(); }}
+      // A click on the dialog element itself (not its content) is a click on the backdrop.
+      onClick={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}
+    >
       <h3>{title}</h3>
       <div className="dialog-body">{children}</div>
       <div className="dialog-actions">
         <button className="btn ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button className={`btn ${danger ? "danger-solid" : "primary"}`} onClick={onConfirm} disabled={busy}>
+        <button className={`btn ${danger ? "danger-solid" : "primary"}`} onClick={onConfirm} disabled={busy || confirmDisabled}>
           {busy ? <Spinner small /> : confirmLabel}
         </button>
       </div>

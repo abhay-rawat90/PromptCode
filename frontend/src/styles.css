@@ -228,7 +228,7 @@ input, select, textarea {
 textarea { resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
 [aria-invalid="true"] { border-color: var(--bad) !important; }
-input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; flex-shrink: 0; }
 
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field > label { font-weight: 600; font-size: 13.5px; }
@@ -403,9 +403,24 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 .link-btn { background: none; border: none; padding: 0; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .link-btn:hover { color: var(--text); }
 .report-line { margin-top: 18px; }
-.report-form { display: grid; gap: 8px; margin-top: 4px; }
-.report-form textarea { width: 100%; margin-top: 4px; }
-.radio-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.dialog:has(.report-form) { width: min(500px, calc(100vw - 32px)); }
+.report-form { display: grid; gap: 14px; color: var(--text); }
+.report-lead { margin: 0; color: var(--muted); }
+.report-options { display: grid; gap: 8px; }
+.report-option {
+  display: flex; align-items: flex-start; gap: 12px; padding: 11px 14px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+.report-option:hover { border-color: var(--border-strong); }
+.report-option.selected { border-color: var(--accent); background: var(--accent-soft); }
+.report-option input { margin-top: 3px; }
+.report-option > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.report-hint { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.report-note-label { display: flex; align-items: baseline; gap: 6px; }
+.report-count { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.report-form textarea { resize: vertical; }
+.report-blocked { margin: 0; color: var(--text); }
 .hidden-banner { margin-bottom: 12px; }
 .alert.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); }
 .alert ul { margin: 6px 0 0; padding-left: 20px; }

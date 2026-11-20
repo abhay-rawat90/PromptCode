@@ -32,6 +32,16 @@ log = logging.getLogger("promptcode.daily")
 
 # Weekly rhythm: gentle start, harder midweek, hard on Friday.
 DIFFICULTY_BY_WEEKDAY = ["easy", "medium", "medium", "hard", "hard", "medium", "easy"]
+# How many test cases a generated problem has, by difficulty (picked per day for variety).
+TEST_COUNT_RANGE = {"easy": (5, 7), "medium": (7, 9), "hard": (9, 12)}
+MIN_TESTS, MAX_TESTS = 5, 12
+
+
+def test_plan(day: date) -> tuple[int, int]:
+    """(total tests, visible samples) for the problem of `day`."""
+    low, high = TEST_COUNT_RANGE[DIFFICULTY_BY_WEEKDAY[day.weekday()]]
+    total = random.Random(day.toordinal() * 7 + 3).randint(low, high)
+    return total, 3 if total >= 9 else 2
 THEMES = [
     "strict output formats (exact labels, single tokens, fixed templates)",
     "information extraction into JSON",
@@ -133,10 +143,12 @@ def _brief(day: date, feedback: str | None) -> str:
         titles = db.scalars(select(Problem.title).order_by(Problem.id.desc()).limit(80)).all()
     rng = random.Random(day.toordinal())
     theme = THEMES[day.toordinal() % len(THEMES)]
+    total, samples = test_plan(day)
     parts = [
         f"Date: {day.isoformat()}.",
         f"Difficulty: {DIFFICULTY_BY_WEEKDAY[day.weekday()]}.",
         f"Theme to explore: {theme}.",
+        f"Test cases: exactly {total}, of which {samples} are visible samples and {total - samples} hidden.",
         f"Random seed for variety: {rng.randint(1000, 9999)}.",
         "Existing titles (do not repeat or closely imitate):\n- " + "\n- ".join(titles),
     ]
@@ -205,8 +217,9 @@ async def verify(spec: ProblemIn, reference_prompt: str) -> str | None:
     to fix). Raises GenerationAborted when verification itself couldn't run."""
     cases = unsaved_cases(spec)
     sample, hidden = sum(c.is_sample for c in cases), sum(not c.is_sample for c in cases)
-    if not (4 <= len(cases) <= 8) or sample < 1 or hidden < 2:
-        return f"Need 4-8 tests with at least 1 sample and 2 hidden (got {sample} sample, {hidden} hidden)."
+    if not (MIN_TESTS <= len(cases) <= MAX_TESTS) or not (1 <= sample <= 3) or hidden < 3:
+        return (f"Need {MIN_TESTS}-{MAX_TESTS} tests with 1-3 samples and at least 3 hidden "
+                f"(got {sample} sample, {hidden} hidden).")
 
     result = await check_problem(cases, reference_prompt)
     if result.infra_error:

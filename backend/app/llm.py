@@ -805,9 +805,13 @@ Requirements:
   constraint following, robustness to adversarial input, tone control, structured reasoning, etc.
 - `description` is Markdown. State the exact required output format so a careful solver can pass
   hidden tests without seeing them, and say whether to use {{input}}.
-- 4 to 7 test cases: exactly 2 with is_sample=true, the rest hidden (is_sample=false). Hidden tests
-  should cover edge cases the description warns about.
-- Prefer deterministic checks (exact, regex, json_schema, contains, not_contains). At most 2
+- Use exactly the number of test cases and visible samples given in the brief; the rest are hidden
+  (is_sample=false). Hidden tests should cover the edge cases the description warns about, with
+  varied inputs: typical cases, tricky or ambiguous ones, boundary values, and (where it fits)
+  inputs that try to trick the model.
+- Mix check types where it suits the task (e.g. exact or regex for the core answer, plus
+  not_contains to forbid extra text), rather than repeating one check for every test.
+- Prefer deterministic checks (exact, regex, json_schema, contains, not_contains). At most 3
   llm_judge tests. Expected values must be unambiguous - one correct answer per test.
 - `reference_prompt` is a strong solution that passes EVERY test. `starter_prompt` is a weak but
   sensible first attempt (or empty).

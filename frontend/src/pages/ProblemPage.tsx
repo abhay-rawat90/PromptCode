@@ -134,11 +134,12 @@ function RunningPanel({ kind, progress }: { kind: Kind; progress: Progress }) {
   );
 }
 
-const REPORT_REASONS: { value: ReportReason; label: string }[] = [
-  { value: "wrong_tests", label: "A test is wrong or impossible to pass" },
-  { value: "unclear", label: "The description is unclear" },
-  { value: "other", label: "Something else" },
+const REPORT_REASONS: { value: ReportReason; label: string; hint: string }[] = [
+  { value: "wrong_tests", label: "A test is wrong", hint: "An expected answer is incorrect, or a test can't be passed." },
+  { value: "unclear", label: "The description is unclear", hint: "The task or the required output format is hard to understand." },
+  { value: "other", label: "Something else", hint: "Anything else that's broken or inappropriate." },
 ];
+const NOTE_MAX = 500;
 
 function ReportDialog({ slug, open, onClose }: { slug: string; open: boolean; onClose: () => void }) {
   const { user } = useAuth();
@@ -146,6 +147,15 @@ function ReportDialog({ slug, open, onClose }: { slug: string; open: boolean; on
   const [reason, setReason] = useState<ReportReason>("wrong_tests");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const unverified = Boolean(user && !user.email_verified);
+
+  // Start fresh each time the dialog opens.
+  useEffect(() => {
+    if (open) {
+      setReason("wrong_tests");
+      setNote("");
+    }
+  }, [open]);
 
   async function send() {
     setBusy(true);
@@ -162,18 +172,35 @@ function ReportDialog({ slug, open, onClose }: { slug: string; open: boolean; on
   }
 
   return (
-    <ConfirmDialog open={open} title="Report this problem" confirmLabel="Send report" busy={busy} onConfirm={send} onCancel={onClose}>
-      {user && !user.email_verified ? (
-        <p>Please verify your email first (see <Link to="/settings">Settings</Link>), then you can report problems.</p>
+    <ConfirmDialog open={open} title="Report a problem" confirmLabel="Send report" busy={busy} confirmDisabled={unverified}
+      onConfirm={send} onCancel={onClose}>
+      {unverified ? (
+        <p className="report-blocked">
+          Please verify your email first (open <Link to="/settings" onClick={onClose}>Settings</Link> to resend the link),
+          then you can report problems.
+        </p>
       ) : (
         <div className="report-form">
-          {REPORT_REASONS.map((r) => (
-            <label key={r.value} className="radio-row">
-              <input type="radio" name="reason" checked={reason === r.value} onChange={() => setReason(r.value)} /> {r.label}
+          <p className="report-lead">Tell us what's wrong. An admin reviews every report.</p>
+          <div className="report-options" role="radiogroup" aria-label="What's wrong?">
+            {REPORT_REASONS.map((r) => (
+              <label key={r.value} className={`report-option ${reason === r.value ? "selected" : ""}`}>
+                <input type="radio" name="report-reason" checked={reason === r.value} onChange={() => setReason(r.value)} />
+                <span>
+                  <strong>{r.label}</strong>
+                  <span className="report-hint">{r.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="field">
+            <label htmlFor="report-note" className="report-note-label">
+              Details <span className="muted">(optional)</span>
+              <span className="report-count">{note.length}/{NOTE_MAX}</span>
             </label>
-          ))}
-          <textarea rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
-            placeholder="What's wrong? e.g. 'Test 2 expects Paris but the input is about Rome.'" aria-label="Details" />
+            <textarea id="report-note" rows={3} maxLength={NOTE_MAX} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. Hidden test 4 seems to expect 'neutral', but the review is clearly positive." />
+          </div>
         </div>
       )}
     </ConfirmDialog>

@@ -1,6 +1,7 @@
 """Phase C: hidden model details, hints, solutions, ratings, badges and streak reminders."""
 
 import asyncio
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -11,18 +12,25 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import DailyChallenge, Problem, Submission, User
 from app.routers import admin as admin_router
+from app.seed import PROBLEMS
 
 SLUG = "sentiment-label"  # a seeded problem with 3 hints and an official solution
 
 
+def _correct_answer(test: dict) -> str:
+    """An output that passes a starter problem's exact or regex test (all the fake needs)."""
+    if test["check_type"] == "regex":  # e.g. \A30(\.0+)?\Z -> 30
+        return re.sub(r"\\[AZ]|\(\\\.0\+\)\?", "", test["expected"])
+    return test["expected"]
+
+
 @pytest.fixture
 def fake_llm(monkeypatch):
-    """Passes every sentiment-label test when the prompt contains SOLVE."""
-    answers = {"Absolutely": "positive", "Broke": "negative", "It arrived": "neutral", "Not bad": "positive", "I wanted": "negative",
-               "A box": "84", "Sam": "28", "A train": "210", "What is 17": "391", "A shirt": "30"}
+    """Passes every starter problem's exact and regex tests when the prompt contains SOLVE."""
+    answers = {t["input"]: _correct_answer(t) for spec in PROBLEMS for t in spec["tests"]}
 
     async def run_prompt(prompt, test_input):
-        text = next((v for k, v in answers.items() if test_input.startswith(k)), "yes") if "SOLVE" in prompt else "nope"
+        text = answers.get(test_input, "yes") if "SOLVE" in prompt else "nope"
         tokens = 100 if "LONG" in prompt else 1 if "TINY" in prompt else 10
         return llm.LLMResult(text=text, input_tokens=tokens, output_tokens=2, model="gemini:gemini-3.5-flash-lite",
                              backup=True, cached=True)
@@ -53,7 +61,7 @@ def test_model_details_are_admin_only(make_client, fake_llm):
     assert all(r["model"] is None and r["backup"] is False and r["cached"] is False for r in out["results"])
 
     admin_out = solve(make_client("curious_admin", admin=True))
-    assert admin_out["backup_models"] == ["gemini-3.5-flash-lite"] and admin_out["cached"] == 5
+    assert admin_out["backup_models"] == ["gemini-3.5-flash-lite"] and admin_out["cached"] == len(admin_out["results"])
     assert admin_out["results"][0]["model"] == "gemini-3.5-flash-lite"
 
 
